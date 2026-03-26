@@ -253,7 +253,9 @@ io.on('connection', (socket) => {
 
 // --- SERVE THE REACT FRONTEND ---
 app.use(express.static(path.join(__dirname, '../frontend/build')));
-app.get('*', (req, res) => { 
+
+// FIX: Use app.use instead of app.get('*') to avoid the path-to-regexp crash
+app.use((req, res) => { 
   res.sendFile(path.join(__dirname, '../frontend/build', 'index.html')); 
 });
 
