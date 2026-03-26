@@ -307,6 +307,8 @@ io.on('connection', (socket) => {
     } catch (err) {}
   });
 
+}); // <--- ADDED THIS LINE! This correctly closes the io.on('connection') block.
+
 // --- SERVE THE REACT FRONTEND ---
 app.use(express.static(path.join(__dirname, '../frontend/build')));
 
