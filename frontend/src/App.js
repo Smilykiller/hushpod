@@ -209,19 +209,20 @@ function App() {
     const samples = [];
     for (let i = 0; i < 5; i++) {
       try {
-        const t1 = performance.now();
+        const t1 = Date.now();
         const r = await fetch(SERVER + '/clocksync', { cache: 'no-store' });
-        const t4 = performance.now();
         const { t } = await r.json();
+        const t4 = Date.now();
         const rtt = t4 - t1;
-        if (rtt < 150) samples.push({ offset: t + rtt / 2 - Date.now(), rtt });
+        // FIX: Accept the connection even if it's slower than 150ms!
+        samples.push({ offset: t + (rtt / 2) - Date.now(), rtt });
       } catch {}
-      await new Promise(r => setTimeout(r, 40));
     }
-    if (samples.length) {
+    if (samples.length > 0) {
+      // Sort to find the fastest, most accurate ping we got
       samples.sort((a, b) => a.rtt - b.rtt);
-      const offs = samples.slice(0, 3).map(s => s.offset).sort((a, b) => a - b);
-      stateRef.current.clockOff = offs[Math.floor(offs.length / 2)];
+      // Trust the absolute best connection to sync the audio
+      stateRef.current.clockOff = samples[0].offset;
     }
   };
 
@@ -355,6 +356,19 @@ function App() {
 
     sock.on('playstate', ({ playing, currentTime, ts }) => { 
       if(!stateRef.current.amAdmin) applyPlayState(playing, currentTime, ts, false); 
+    });
+
+    // FIX: Catch guest phones that drift out of sync and snap them back perfectly
+    sock.on('heartbeat', ({ currentTime, ts }) => {
+      if (stateRef.current.amAdmin || !stateRef.current.localPlayState || !audioBufferRef.current) return;
+      const elapsed = (sNow() - ts) / 1000;
+      const expectedTime = currentTime + elapsed;
+      const actualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
+      
+      // If a guest drifts more than 0.4 seconds out of sync, autocorrect it
+      if (Math.abs(expectedTime - actualTime) > 0.4) {
+        applyPlayState(true, currentTime, ts, false);
+      }
     });
 
     sock.on('queue-updated', ({ queue }) => setQueue(queue));
