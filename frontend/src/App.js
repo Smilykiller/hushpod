@@ -5,7 +5,9 @@ import { QRCodeSVG } from 'qrcode.react';
 const SERVER = window.location.port === '3000' ? `http://${window.location.hostname}:5000` : window.location.origin;
 
 function App() {
-  const [view, setView] = useState('marketing'); 
+  const [view, setView] = useState('marketing');
+  const [openFaq, setOpenFaq] = useState(null);
+  const [activeRooms, setActiveRooms] = useState(4); 
   const [toastData, setToastData] = useState({ msg: '', type: 'inf', visible: false });
   const [modals, setModals] = useState({ qr: false, tos: false });
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -13,6 +15,7 @@ function App() {
 
   const [uname, setUname] = useState('');
   const [roomCode, setRoomCode] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
   const [codeInput, setCodeInput] = useState('');
   const [members, setMembers] = useState([]);
   const [queue, setQueue] = useState([]);
@@ -22,9 +25,9 @@ function App() {
   const [syncState, setSyncState] = useState({ state: 'syncing', label: 'Waiting for host...' });
   const [isPlaying, setIsPlaying] = useState(false);
   
-  const [admins, setAdmins] = useState([]);
   const [guestUploads, setGuestUploads] = useState(false);
   const [globalVolume, setGlobalVolume] = useState(1.0);
+  const [orbitActive, setOrbitActive] = useState(false);
   const [isLooping, setIsLooping] = useState(false);
   const [isShuffle, setIsShuffle] = useState(false);
   const [draggedIdx, setDraggedIdx] = useState(null);
@@ -37,15 +40,17 @@ function App() {
   const audioBufferRef = useRef(null);
   const sourceNodeRef = useRef(null);
   const gainNodeRef = useRef(null);
+  const pannerNodeRef = useRef(null); // ORBIT: Controls Left/Right Audio
   const analyserRef = useRef(null);
   
-  // FIX 1 & 4: State updates for Shuffle Fix and Chat Popups
-  const stateRef = useRef({ clockOff: 0, songOffset: 0, nodeStartTime: 0, localPlayState: false, amAdmin: false, amHost: false, queue: [], loop: false, shuffle: false, currentSongId: null, uname: '' });
+  const stateRef = useRef({ clockOff: 0, songOffset: 0, nodeStartTime: 0, localPlayState: false, amHost: false, queue: [], loop: false, shuffle: false, currentSongId: null, uname: '', members: [], globalVolume: 1.0, orbitActive: false });
   
   const progFillRef = useRef(null);
   const tCurRef = useRef(null);
   const chatBoxRef = useRef(null);
   const vizRafRef = useRef(null);
+  const orbitRafRef = useRef(null);
+  const audioOrbitRaf = useRef(null);
   const toastTmr = useRef(null);
 
   const toast = (msg, type = 'inf') => {
@@ -54,8 +59,9 @@ function App() {
     toastTmr.current = setTimeout(() => setToastData(t => ({ ...t, visible: false })), 3000);
   };
 
-  const amAdmin = socketRef.current && admins.includes(socketRef.current.id);
-  const amHost = socketRef.current && admins[0] === socketRef.current.id;
+  // Safely find our user in the room list to see if we are the Host
+  const myMemberData = members.find(m => m.id === socketRef.current?.id);
+  const amHost = myMemberData ? myMemberData.isHost : false;
 
   useEffect(() => {
     stateRef.current.queue = queue;
@@ -64,9 +70,22 @@ function App() {
     stateRef.current.currentSongId = currentSong?.id;
     stateRef.current.uname = uname;
     stateRef.current.amHost = amHost;
-  }, [queue, isLooping, isShuffle, currentSong, uname, amHost]);
+    stateRef.current.members = members;
+    stateRef.current.globalVolume = globalVolume;
+    stateRef.current.orbitActive = orbitActive;
+  }, [queue, isLooping, isShuffle, currentSong, uname, amHost, members, globalVolume, orbitActive]);
 
-  // FIX 2: PAGE REFRESH AUTO-RECONNECT
+  useEffect(() => {
+    if (view === 'marketing') {
+      const observer = new IntersectionObserver(entries => {
+        entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+      }, { threshold: 0.12 });
+      setTimeout(() => { document.querySelectorAll('.reveal').forEach(el => observer.observe(el)); }, 100);
+      const interval = setInterval(() => { setActiveRooms(prev => Math.max(1, prev + (Math.random() > 0.5 ? 1 : -1))); }, 7000);
+      return () => { observer.disconnect(); clearInterval(interval); };
+    }
+  }, [view]);
+
   useEffect(() => {
     const session = sessionStorage.getItem('hushpod_session');
     if (session) {
@@ -77,8 +96,7 @@ function App() {
         socketRef.current.emit('join-room', { code, name, claimHost: false }, (res) => {
           if (res.error) { sessionStorage.removeItem('hushpod_session'); return; }
           setRoomCode(code); setMembers(res.members); setQueue(res.queue);
-          setAdmins(res.admins); setGuestUploads(res.guestUploads); setGlobalVolume(res.globalVolume);
-          stateRef.current.amAdmin = res.admins.includes(socketRef.current.id);
+          setGuestUploads(res.guestUploads); setGlobalVolume(res.globalVolume); setOrbitActive(res.orbitActive || false);
           
           const hostUser = res.members.find(m => m.isHost);
           document.title = `HushPod | ${hostUser ? hostUser.name : 'Room'}'s Party`;
@@ -146,49 +164,20 @@ function App() {
       }
     };
     window.addEventListener('scroll', handleScroll);
-
-    const observer = new IntersectionObserver(entries => {
-      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); } });
-    }, { threshold: .12 });
-    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
-
-    const counterEl = document.getElementById('counter-rooms');
-    let counterInterval, fluctuateInterval;
-    if (counterEl) {
-      let val = 0; let target = Math.floor(Math.random() * 8) + 3;
-      counterInterval = setInterval(() => {
-        val++; counterEl.textContent = val;
-        if (val >= target) clearInterval(counterInterval);
-      }, 120);
-      fluctuateInterval = setInterval(() => {
-        const delta = (Math.random() > .5 ? 1 : -1);
-        target = Math.max(1, target + delta);
-        counterEl.textContent = target;
-      }, 7000);
-    }
-
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-      observer.disconnect();
-      clearInterval(counterInterval);
-      clearInterval(fluctuateInterval);
-    };
+    return () => window.removeEventListener('scroll', handleScroll);
   }, [view]);
-
-  const navToApp = (e) => {
-    e.preventDefault();
-    setView('app-entry');
-    window.scrollTo(0,0);
-  };
 
   const initSystem = async () => {
     if (!actxRef.current) {
       actxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      
       gainNodeRef.current = actxRef.current.createGain();
       analyserRef.current = actxRef.current.createAnalyser();
       analyserRef.current.fftSize = 128;
+      pannerNodeRef.current = actxRef.current.createStereoPanner ? actxRef.current.createStereoPanner() : actxRef.current.createGain();
       
-      // Reverted Audio Routing
+      // The Safe Audio Graph: Panner -> Analyser -> Gain -> Speakers
+      pannerNodeRef.current.connect(analyserRef.current);
       analyserRef.current.connect(gainNodeRef.current);
       gainNodeRef.current.connect(actxRef.current.destination);
     }
@@ -214,14 +203,11 @@ function App() {
         const { t } = await r.json();
         const t4 = Date.now();
         const rtt = t4 - t1;
-        // FIX: Accept the connection even if it's slower than 150ms!
         samples.push({ offset: t + (rtt / 2) - Date.now(), rtt });
       } catch {}
     }
     if (samples.length > 0) {
-      // Sort to find the fastest, most accurate ping we got
       samples.sort((a, b) => a.rtt - b.rtt);
-      // Trust the absolute best connection to sync the audio
       stateRef.current.clockOff = samples[0].offset;
     }
   };
@@ -243,12 +229,12 @@ function App() {
     sourceNodeRef.current = actxRef.current.createBufferSource();
     sourceNodeRef.current.buffer = audioBufferRef.current;
     
-    sourceNodeRef.current.connect(analyserRef.current);
+    // Connect audio file directly to Orbit Panner
+    sourceNodeRef.current.connect(pannerNodeRef.current);
 
     sourceNodeRef.current.onended = () => {
       const s = stateRef.current;
       if (s.localPlayState && actxRef.current.currentTime >= s.nodeStartTime + audioBufferRef.current.duration - s.songOffset - 0.1) {
-        // FIX 1: ONLY the Host triggers the next song. This solves the Shuffle mismatch issue when admins change!
         if (s.amHost) {
           const q = s.queue;
           if (q.length > 0) {
@@ -274,14 +260,14 @@ function App() {
 
   const guestLoadAndSync = async (url, playState, isNewJoiner = false) => {
     stopAudio(); audioBufferRef.current = null;
-    if (!stateRef.current.amAdmin) setSyncState({ state: 'syncing', label: 'Downloading track...' });
+    if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Downloading track...' });
     
     try {
       const res = await fetch(url);
       const arrayBuffer = await res.arrayBuffer();
       audioBufferRef.current = await actxRef.current.decodeAudioData(arrayBuffer);
       applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
-    } catch(e) { if (!stateRef.current.amAdmin) setSyncState({ state: 'fixing', label: 'Error loading track' }); }
+    } catch(e) { if (!stateRef.current.amHost) setSyncState({ state: 'fixing', label: 'Error loading track' }); }
   };
 
   const applyPlayState = (playing, currentTime, ts, isNewJoiner = false) => {
@@ -290,7 +276,7 @@ function App() {
     
     if (!playing) { 
       stopAudio(); stateRef.current.songOffset = currentTime; 
-      if(!stateRef.current.amAdmin) setSyncState({ state: 'synced', label: 'Paused' });
+      if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Paused' });
       return; 
     }
     
@@ -299,12 +285,12 @@ function App() {
 
     if (expectedOffset < 0) { startTime = actxRef.current.currentTime + Math.abs(expectedOffset); expectedOffset = 0; }
     
-    if (isNewJoiner && !stateRef.current.amAdmin && expectedOffset > 0) {
+    if (isNewJoiner && !stateRef.current.amHost && expectedOffset > 0) {
         const delay = 3.0; expectedOffset += delay; startTime = actxRef.current.currentTime + delay; 
         setSyncState({ state: 'syncing', label: 'Locking sync... playing in 3s' });
         setTimeout(() => { if(stateRef.current.localPlayState) setSyncState({ state: 'synced', label: 'Locked Sync' }); }, delay * 1000);
     } else {
-        if(!stateRef.current.amAdmin) setSyncState({ state: 'synced', label: 'Locked Sync' });
+        if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Locked Sync' });
     }
 
     if (expectedOffset >= audioBufferRef.current.duration) { stopAudio(); return; }
@@ -312,7 +298,7 @@ function App() {
   };
 
   const handleSeek = (newTime) => {
-    if (!amAdmin || !audioBufferRef.current) return;
+    if (!amHost || !audioBufferRef.current) return;
     socketRef.current.emit('playstate', { playing: stateRef.current.localPlayState, currentTime: newTime, ts: sNow() });
     applyPlayState(stateRef.current.localPlayState, newTime, sNow(), false);
   };
@@ -342,30 +328,107 @@ function App() {
     if (tCurRef.current) tCurRef.current.textContent = fmt(currentPos);
   };
 
+  // --- ORBIT MODE LOGIC ---
+  useEffect(() => {
+    const runOrbitUI = () => {
+      if (roomTab !== 'orbit') return;
+      orbitRafRef.current = requestAnimationFrame(runOrbitUI);
+      const cvs = document.getElementById('orbit-canvas');
+      if(!cvs) return; const ctx = cvs.getContext('2d');
+      const W = cvs.width = cvs.offsetWidth; const H = cvs.height = cvs.offsetHeight;
+      const cx = W/2, cy = H/2; const radius = Math.min(W, H) * 0.35;
+      
+      const speedMs = 12000;
+      const radarAngle = (((Date.now() + stateRef.current.clockOff) % speedMs) / speedMs) * Math.PI * 2;
+
+      ctx.fillStyle = 'rgba(10, 10, 20, 0.4)'; ctx.fillRect(0, 0, W, H);
+      
+      ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI*2);
+      ctx.strokeStyle = 'rgba(76,201,240,0.15)'; ctx.lineWidth = 1; ctx.stroke();
+
+      if (stateRef.current.orbitActive) {
+        ctx.save(); ctx.translate(cx, cy); ctx.rotate(radarAngle);
+        ctx.beginPath(); ctx.moveTo(0,0); ctx.arc(0, 0, radius * 1.3, 0, Math.PI * 0.3);
+        ctx.lineTo(0,0);
+        const grad = ctx.createRadialGradient(0,0,0, 0,0,radius*1.3);
+        grad.addColorStop(0, 'rgba(247,37,133,0.6)'); grad.addColorStop(1, 'rgba(247,37,133,0)');
+        ctx.fillStyle = grad; ctx.fill(); ctx.restore();
+      }
+
+      const total = stateRef.current.members.length || 1;
+      stateRef.current.members.forEach((m, i) => {
+        const a = (i / total) * Math.PI * 2;
+        const x = cx + Math.cos(a) * radius; const y = cy + Math.sin(a) * radius;
+        
+        let diff = Math.abs(radarAngle - a);
+        if (diff > Math.PI) diff = Math.PI * 2 - diff;
+        const isHit = stateRef.current.orbitActive && diff < 0.6;
+        
+        ctx.beginPath(); ctx.arc(x, y, isHit ? 14 : 8, 0, Math.PI * 2);
+        ctx.fillStyle = m.id === socketRef.current?.id ? '#4cc9f0' : (m.isHost ? '#f72585' : '#7777aa');
+        if (isHit) { ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 20; }
+        ctx.fill(); ctx.shadowBlur = 0;
+
+        ctx.fillStyle = isHit ? '#fff' : 'var(--sub)'; ctx.font = '11px JetBrains Mono'; ctx.textAlign = 'center';
+        ctx.fillText(m.id === socketRef.current?.id ? 'YOU' : m.name, x, y + 25);
+      });
+    };
+    if (roomTab === 'orbit') runOrbitUI();
+    return () => cancelAnimationFrame(orbitRafRef.current);
+  }, [roomTab]);
+
+  useEffect(() => {
+    const updateAudioOrbit = () => {
+      audioOrbitRaf.current = requestAnimationFrame(updateAudioOrbit);
+      if (!stateRef.current.orbitActive || !pannerNodeRef.current || !pannerNodeRef.current.pan) {
+        if (pannerNodeRef.current && pannerNodeRef.current.pan) pannerNodeRef.current.pan.setTargetAtTime(0, actxRef.current.currentTime, 0.1);
+        if (gainNodeRef.current) gainNodeRef.current.gain.setTargetAtTime(stateRef.current.globalVolume, actxRef.current.currentTime, 0.1);
+        return;
+      }
+      
+      const total = stateRef.current.members.length || 1;
+      const myIdx = stateRef.current.members.findIndex(m => m.id === socketRef.current?.id);
+      if (myIdx === -1) return;
+      const myAngle = (myIdx / total) * Math.PI * 2;
+      
+      const speedMs = 12000;
+      const radarAngle = (((Date.now() + stateRef.current.clockOff) % speedMs) / speedMs) * Math.PI * 2;
+      
+      let diff = Math.abs(radarAngle - myAngle);
+      if (diff > Math.PI) diff = Math.PI * 2 - diff;
+      
+      const vol = 0.2 + 0.8 * Math.max(0, Math.cos(diff));
+      gainNodeRef.current.gain.setTargetAtTime(vol * stateRef.current.globalVolume, actxRef.current.currentTime, 0.1);
+      
+      const panRaw = Math.sin(radarAngle - myAngle);
+      pannerNodeRef.current.pan.setTargetAtTime(panRaw, actxRef.current.currentTime, 0.1);
+    };
+    updateAudioOrbit();
+    return () => cancelAnimationFrame(audioOrbitRaf.current);
+  }, []);
+
   const setupSocketListeners = (sock) => {
     sock.on('song-changed', ({ songId, name, streamUrl, playState }) => {
       setCurrentSong({ id: songId, name, duration: 0 });
       document.title = `HushPod | ${name}`;
-      guestLoadAndSync(SERVER + streamUrl, playState, !stateRef.current.amAdmin);
+      guestLoadAndSync(SERVER + streamUrl, playState, !stateRef.current.amHost);
     });
 
     sock.on('play-scheduled', ({ currentTime, targetTs }) => {
-      if(!stateRef.current.amAdmin) setSyncState({ state: 'syncing', label: 'Readying...' });
+      if(!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Readying...' });
       applyPlayState(true, currentTime, targetTs, false);
     });
 
     sock.on('playstate', ({ playing, currentTime, ts }) => { 
-      if(!stateRef.current.amAdmin) applyPlayState(playing, currentTime, ts, false); 
+      if(!stateRef.current.amHost) applyPlayState(playing, currentTime, ts, false); 
     });
 
-    // FIX: Catch guest phones that drift out of sync and snap them back perfectly
     sock.on('heartbeat', ({ currentTime, ts }) => {
-      if (stateRef.current.amAdmin || !stateRef.current.localPlayState || !audioBufferRef.current) return;
+      if (stateRef.current.amHost || !stateRef.current.localPlayState || !audioBufferRef.current) return;
       const elapsed = (sNow() - ts) / 1000;
       const expectedTime = currentTime + elapsed;
       const actualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
       
-      // If a guest drifts more than 0.4 seconds out of sync, autocorrect it
       if (Math.abs(expectedTime - actualTime) > 0.4) {
         applyPlayState(true, currentTime, ts, false);
       }
@@ -375,18 +438,15 @@ function App() {
     
     sock.on('chat-msg', ({ name, text }) => { 
       setChat(prev => [...prev, { name, text }]); 
-      // FIX 4: CHAT POPUP TOAST
-      if (name !== stateRef.current.uname) {
-        toast(`💬 ${name}: ${text}`, 'inf');
-      }
+      if (name !== stateRef.current.uname) { toast(`💬 ${name}: ${text}`, 'inf'); }
       setTimeout(() => { if (chatBoxRef.current) chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight; }, 10); 
     });
     
     sock.on('settings-updated', (s) => {
-      setAdmins(s.admins); setGuestUploads(s.guestUploads); 
+      setGuestUploads(s.guestUploads); 
       setGlobalVolume(s.globalVolume);
-      if (gainNodeRef.current && actxRef.current) gainNodeRef.current.gain.setValueAtTime(s.globalVolume, actxRef.current.currentTime);
-      stateRef.current.amAdmin = s.admins.includes(sock.id);
+      setOrbitActive(s.orbitActive);
+      if (gainNodeRef.current && actxRef.current && !s.orbitActive) gainNodeRef.current.gain.setValueAtTime(s.globalVolume, actxRef.current.currentTime);
     });
 
     sock.on('member-joined', ({ members }) => { setMembers(members); });
@@ -417,30 +477,32 @@ function App() {
     setModals({ ...modals, tos: false });
     
     if (pendingAction === 'create') {
+      setIsSyncing(true);
       await initSystem();
       socketRef.current.emit('create-room', { name: uname }, (res) => {
-        setRoomCode(res.code); setAdmins([socketRef.current.id]); stateRef.current.amAdmin = true;
+        setRoomCode(res.code); 
         
-        sessionStorage.setItem('hushpod_session', JSON.stringify({ code: res.code, name: uname }));
+        // INSTANT HOST FIX
+        setMembers([{ id: socketRef.current.id, name: uname, isHost: true }]);
 
+        sessionStorage.setItem('hushpod_session', JSON.stringify({ code: res.code, name: uname }));
+        setIsSyncing(false);
         setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
         document.title = `HushPod | ${uname}'s Party`;
         setInterval(() => {
           const s = stateRef.current;
-          if(s.localPlayState && socketRef.current && s.amAdmin) socketRef.current.emit('heartbeat', { currentTime: Math.max(0, s.songOffset + (actxRef.current.currentTime - s.nodeStartTime)) });
+          if(s.localPlayState && socketRef.current && s.amHost) socketRef.current.emit('heartbeat', { currentTime: Math.max(0, s.songOffset + (actxRef.current.currentTime - s.nodeStartTime)) });
         }, 1000);
       });
     } 
     else if (pendingAction === 'join') {
+      setIsSyncing(true);
       await initSystem();
       socketRef.current.emit('join-room', { code: codeInput, name: uname, claimHost: false }, (res) => {
-        if (res.error) return toast(res.error, 'err');
-        
+        if (res.error) { setIsSyncing(false); return toast(res.error, 'err'); }
         sessionStorage.setItem('hushpod_session', JSON.stringify({ code: codeInput, name: uname }));
-
         setRoomCode(codeInput); setMembers(res.members); setQueue(res.queue);
-        setAdmins(res.admins); setGuestUploads(res.guestUploads); setGlobalVolume(res.globalVolume);
-        stateRef.current.amAdmin = res.admins.includes(socketRef.current.id);
+        setGuestUploads(res.guestUploads); setGlobalVolume(res.globalVolume); setOrbitActive(res.orbitActive || false);
         
         const hostUser = res.members.find(m => m.isHost);
         document.title = `HushPod | ${hostUser ? hostUser.name : 'Room'}'s Party`;
@@ -449,13 +511,14 @@ function App() {
           setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
           guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true);
         }
+        setIsSyncing(false);
         setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
       });
     }
   };
 
   const togglePlay = () => {
-    if (!amAdmin) return;
+    if (!amHost) return;
     const s = stateRef.current;
     let cur = s.localPlayState ? s.songOffset + (actxRef.current.currentTime - s.nodeStartTime) : s.songOffset;
     if (!s.localPlayState) { socketRef.current.emit('schedule-play', { currentTime: cur }); }
@@ -463,7 +526,7 @@ function App() {
   };
 
   const seekClick = (e) => {
-    if (!amAdmin || !audioBufferRef.current) return;
+    if (!amHost || !audioBufferRef.current) return;
     const r = e.currentTarget.getBoundingClientRect();
     const percent = (e.clientX - r.left) / r.width;
     const t = Math.max(0, Math.min(audioBufferRef.current.duration, percent * audioBufferRef.current.duration));
@@ -472,7 +535,7 @@ function App() {
 
   const uploadSongs = (files) => {
     if (!files || files.length === 0) return;
-    if (!amAdmin && !guestUploads) return toast('Host has locked uploads', 'err');
+    if (!amHost && !guestUploads) return toast('Host has locked uploads', 'err');
     
     let filesToUpload = Array.from(files);
     if (filesToUpload.length > 10) {
@@ -496,11 +559,11 @@ function App() {
   };
 
   const handleGlobalVolume = (e) => {
-    if(!amAdmin) return;
+    if(!amHost) return;
     const val = parseFloat(e.target.value);
     setGlobalVolume(val);
     socketRef.current.emit('set-global-volume', { volume: val });
-    if (gainNodeRef.current && actxRef.current) gainNodeRef.current.gain.setValueAtTime(val, actxRef.current.currentTime);
+    if (gainNodeRef.current && actxRef.current && !orbitActive) gainNodeRef.current.gain.setValueAtTime(val, actxRef.current.currentTime);
   };
 
   const handleChat = () => { if (!chatInput.trim()) return; socketRef.current.emit('chat-msg', { text: chatInput.trim() }); setChatInput(''); };
@@ -523,28 +586,167 @@ function App() {
     <>
       <canvas id="bgc"></canvas>
       <div className={`toast ${toastData.visible ? 'on' : ''} ${toastData.type}`}>{toastData.msg}</div>
+      
+      {isSyncing && (
+        <div className="loader-overlay">
+          <div className="eq-container">
+            <div className="eq-bar"></div><div className="eq-bar"></div><div className="eq-bar"></div><div className="eq-bar"></div><div className="eq-bar"></div>
+          </div>
+          <div className="loader-text">Syncing Audio...</div>
+        </div>
+      )}
 
       {view === 'marketing' && (
-        <div className="scr on" id="landing" style={{display:'block'}}>
+        <div className="scr on" id="landing" style={{ display: 'block' }}>
+          
           <nav>
-            <a href="#marketing" className="nav-logo" onClick={e => {e.preventDefault(); window.scrollTo(0,0);}}>HUSHPOD</a>
+            <a href="#marketing" className="nav-logo" onClick={e => { e.preventDefault(); window.scrollTo(0,0); }}>HUSHPOD</a>
             <div className="nav-links">
-              <a href="#how" onClick={e => {e.preventDefault(); document.getElementById('how').scrollIntoView();}}>How it works</a>
-              <a href="#features" onClick={e => {e.preventDefault(); document.getElementById('features').scrollIntoView();}}>Features</a>
-              <a href="#usecases" onClick={e => {e.preventDefault(); document.getElementById('usecases').scrollIntoView();}}>Use Cases</a>
+              <a href="#how" onClick={e => { e.preventDefault(); document.getElementById('how')?.scrollIntoView({behavior: 'smooth'}); }}>How it works</a>
+              <a href="#features" onClick={e => { e.preventDefault(); document.getElementById('features')?.scrollIntoView({behavior: 'smooth'}); }}>Features</a>
+              <a href="#usecases" onClick={e => { e.preventDefault(); document.getElementById('usecases')?.scrollIntoView({behavior: 'smooth'}); }}>Use Cases</a>
+              <a href="#tech" onClick={e => { e.preventDefault(); document.getElementById('tech')?.scrollIntoView({behavior: 'smooth'}); }}>Tech</a>
+              <a href="#faq" onClick={e => { e.preventDefault(); document.getElementById('faq')?.scrollIntoView({behavior: 'smooth'}); }}>FAQ</a>
             </div>
             <a href="#app" className="nav-cta" onClick={(e) => { e.preventDefault(); setView('app-entry'); window.scrollTo(0,0); }}>Start Listening Free →</a>
           </nav>
 
           <div className="wrap">
+            {/* ══ HERO ══ */}
             <section className="hero">
               <div className="hero-eyebrow"><span></span> Live · Synchronized · Private</div>
               <h1 className="hero-title"><span className="line1">HEAR</span><span className="line2">TOGETHER</span></h1>
-              <p className="hero-sub">Real-time synchronized audio for groups.<br/><strong>No app. No account. No lag.</strong></p>
+              <p className="hero-sub">
+                Real-time synchronized audio for groups.<br/>
+                <strong>No app. No account. No lag.</strong> Just open, create a room, and everyone hears the same song at the exact same millisecond.
+              </p>
               <div className="hero-btns">
                 <button className="btn-hero-primary" onClick={() => { setView('app-entry'); window.scrollTo(0,0); }}>🎉 Create a Room Free</button>
+                <a href="#how" className="btn-hero-secondary" onClick={e => { e.preventDefault(); document.getElementById('how')?.scrollIntoView({behavior: 'smooth'}); }}>See How It Works</a>
+              </div>
+
+              <div className="hero-proof">
+                <div className="proof-item"><div className="proof-num">{activeRooms}</div><div className="proof-label">Active Rooms</div></div>
+                <div className="proof-div"></div>
+                <div className="proof-item"><div className="proof-num">&lt;100ms</div><div className="proof-label">Sync Precision</div></div>
+                <div className="proof-div"></div>
+                <div className="proof-item"><div className="proof-num">15</div><div className="proof-label">Listeners Free</div></div>
+                <div className="proof-div"></div>
+                <div className="proof-item"><div className="proof-num">0</div><div className="proof-label">Data Stored</div></div>
+              </div>
+
+              <div className="waveform-demo reveal">
+                <div className="wf-header">
+                  <div className="wf-title">Live Session</div>
+                  <div className="wf-status">4 devices in sync</div>
+                </div>
+                <div className="wf-bars">
+                  {[...Array(38)].map((_, i) => {
+                    const h = 6 + Math.random() * 50;
+                    const d = 0.3 + Math.random() * 0.7;
+                    return <div key={i} className="wf-bar" style={{ '--d': `${d}s`, '--h': `${h}px`, height: `${h}px` }}></div>
+                  })}
+                </div>
+                <div className="wf-devices">
+                  <div className="wf-device active"><div className="wf-device-dot"></div>Host · iPhone 15</div>
+                  <div className="wf-device active"><div className="wf-device-dot"></div>Priya · Galaxy S24</div>
+                  <div className="wf-device active"><div className="wf-device-dot"></div>Arjun · Pixel 8</div>
+                  <div className="wf-device active"><div className="wf-device-dot"></div>Meera · OnePlus</div>
+                </div>
               </div>
             </section>
+
+            {/* ══ HOW IT WORKS ══ */}
+            <section id="how">
+              <div style={{ maxWidth: '1100px', margin: '0 auto', textAlign: 'center' }}>
+                <div className="section-label">⚡ Three Steps</div>
+                <h2 className="section-title">Zero friction.<br/>Instant sync.</h2>
+                <p className="section-sub" style={{ margin: '0 auto' }}>No downloads. No sign-up. Works in any browser on any phone.</p>
+              </div>
+              <div className="steps-grid">
+                <div className="step-card reveal"><div className="step-icon">🎙️</div><div className="step-num">01</div><div className="step-title">Create a Room</div><div className="step-desc">Enter your name, tap "Create Party Room". You get a unique 5-character room code instantly. Upload up to 10 songs from your device.</div></div>
+                <div className="step-card reveal" style={{ transitionDelay: '.1s' }}><div className="step-icon">📲</div><div className="step-num">02</div><div className="step-title">Share the Code</div><div className="step-desc">Send your room code or QR code to friends. They open HushPod in their browser, type the code, and they're in.</div></div>
+                <div className="step-card reveal" style={{ transitionDelay: '.2s' }}><div className="step-icon">🎧</div><div className="step-num">03</div><div className="step-title">Listen Together</div><div className="step-desc">Everyone hears the same audio at the same millisecond. The host controls play, pause, and the queue.</div></div>
+                <div className="step-card reveal" style={{ transitionDelay: '.3s' }}><div className="step-icon">🔄</div><div className="step-num">04</div><div className="step-title">Pass the Aux</div><div className="step-desc">If the host leaves, the next listener becomes DJ automatically — the party never stops.</div></div>
+              </div>
+            </section>
+
+            {/* ══ FEATURES ══ */}
+            <section id="features" style={{ background: 'linear-gradient(180deg,var(--bg),var(--s1) 50%,var(--bg))' }}>
+              <div style={{ maxWidth: '1100px', margin: '0 auto', textAlign: 'center' }}>
+                <div className="section-label">✨ Everything Included</div>
+                <h2 className="section-title">Built for real<br/>group experiences</h2>
+              </div>
+              <div className="features-grid" style={{ maxWidth: '1100px', margin: '64px auto 0' }}>
+                <div className="feat-card reveal"><div className="feat-icon pink">🔴</div><div className="feat-title">Dead Reckoning Sync</div><div className="feat-desc">Between heartbeats, guests mathematically calculate the host's exact position.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.05s' }}><div className="feat-icon cyan">⚡</div><div className="feat-title">Seeked Recalculation</div><div className="feat-desc">After every seek, we recalculate position — eliminating mobile seek latency.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.1s' }}><div className="feat-icon green">🗓️</div><div className="feat-title">Scheduled Playback</div><div className="feat-desc">All devices receive a future server timestamp to begin playback simultaneously.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.15s' }}><div className="feat-icon yellow">📦</div><div className="feat-title">Batch Upload (10 Songs)</div><div className="feat-desc">Upload your entire setlist at once. Auto-advance plays the next song seamlessly.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.2s' }}><div className="feat-icon purple">💬</div><div className="feat-title">Song Suggestions Chat</div><div className="feat-desc">Built-in chat so guests can suggest what to play next in real-time.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.25s' }}><div className="feat-icon indigo">🔗</div><div className="feat-title">QR Code Sharing</div><div className="feat-desc">One tap generates a QR code for your room. Anyone can scan it to join instantly.</div><span className="feat-badge badge-live">Live</span></div>
+              </div>
+            </section>
+
+            {/* ══ USE CASES ══ */}
+            <section id="usecases">
+              <div style={{ maxWidth: '1100px', margin: '0 auto', textAlign: 'center' }}>
+                <div className="section-label">🌍 Use Cases</div>
+                <h2 className="section-title">Made for every<br/>shared moment</h2>
+              </div>
+              <div className="cases-grid" style={{ maxWidth: '1100px', margin: '64px auto 0' }}>
+                <div className="case-card c1 reveal"><div className="case-emoji">🎉</div><div className="case-title">Silent Disco Parties</div><div className="case-desc">Replace expensive FM transmitters with HushPod. Everyone dances to the same beat.</div></div>
+                <div className="case-card c2 reveal" style={{ transitionDelay: '.08s' }}><div className="case-emoji">📚</div><div className="case-title">Synchronized Study</div><div className="case-desc">Study in sync with your friend group. Everyone hears the same lo-fi playlist.</div></div>
+                <div className="case-card c3 reveal" style={{ transitionDelay: '.16s' }}><div className="case-emoji">🚗</div><div className="case-title">Road Trips</div><div className="case-desc">Everyone in different cars hearing the exact same song at the same time.</div></div>
+              </div>
+            </section>
+
+            {/* ══ FAQ ══ */}
+            <section id="faq" style={{ padding: '100px 24px' }}>
+              <div style={{ maxWidth: '760px', margin: '0 auto', textAlign: 'center' }}>
+                <div className="section-label">❓ FAQ</div>
+                <h2 className="section-title">Common questions</h2>
+              </div>
+              <div className="faq-grid">
+                {[
+                  { q: "Do guests need to download an app?", a: "No. HushPod works entirely in the browser. Guests simply open the link, enter the room code, and they're synced." },
+                  { q: "Does everyone need to be on the same WiFi?", a: "No. HushPod works over the internet — different WiFi networks, mobile data, different cities, different countries." },
+                  { q: "What happens if the host leaves?", a: "If the host disconnects, the longest-connected listener automatically becomes the new host. The room stays alive, playback continues." }
+                ].map((faq, i) => (
+                  <div key={i} className={`faq-item reveal ${openFaq === i ? 'open' : ''}`} style={{ transitionDelay: `${i * 0.05}s` }}>
+                    <div className="faq-q" onClick={() => setOpenFaq(openFaq === i ? null : i)}>{faq.q} <span className="faq-arrow">▾</span></div>
+                    <div className="faq-a">{faq.a}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            {/* ══ CTA ══ */}
+            <section id="cta">
+              <div className="cta-glow"></div>
+              <div className="reveal" style={{ position: 'relative' }}>
+                <div className="section-label" style={{ justifyContent: 'center' }}>🎧 Start Free</div>
+                <div className="cta-title"><span>LISTEN</span><br/>TOGETHER<br/><span>NOW</span></div>
+                <p className="cta-sub">Create your first room in under 10 seconds. No sign-up. No credit card.</p>
+                <button className="btn-hero-primary" style={{ fontSize: '18px', padding: '18px 44px' }} onClick={() => { setView('app-entry'); window.scrollTo(0,0); }}>🎉 Create a Free Room</button>
+              </div>
+            </section>
+
+            {/* ══ FOOTER ══ */}
+            <footer>
+              <div className="footer-inner">
+                <div className="footer-top">
+                  <div className="footer-brand">
+                    <a href="#marketing" className="footer-logo" onClick={e => { e.preventDefault(); window.scrollTo(0,0); }}>HUSHPOD</a>
+                    <p className="footer-tagline">Synchronized private group audio. Listen together in perfect sync — no app, no account, no lag.</p>
+                  </div>
+                  <div className="footer-col">
+                    <h4>Product</h4>
+                    <a href="#app" onClick={(e) => { e.preventDefault(); setView('app-entry'); window.scrollTo(0,0); }}>Launch App</a>
+                    <a href="#features" onClick={e => { e.preventDefault(); document.getElementById('features')?.scrollIntoView({behavior: 'smooth'}); }}>Features</a>
+                  </div>
+                </div>
+              </div>
+            </footer>
           </div>
         </div>
       )}
@@ -559,14 +761,14 @@ function App() {
           <div className="field" style={{maxWidth:'340px', margin:'0 auto'}}><label>Your name</label><input type="text" value={uname} onChange={e => setUname(e.target.value)} placeholder="Enter your name" maxLength="20" /></div>
           
           <div className="btns" style={{maxWidth:'340px', margin:'0 auto'}}>
-            <button className="btn btn-pink" onClick={attemptCreateRoom}>Create Party Room</button>
+            <button className="btn-pink" onClick={attemptCreateRoom}>Create Party Room</button>
             <div style={{display:'flex', alignItems:'center', gap:'9px', color:'var(--sub)', fontSize:'12px', margin:'10px 0'}}>
               <span style={{flex:1, height:'1px', background:'var(--border)'}}></span>or join one<span style={{flex:1, height:'1px', background:'var(--border)'}}></span>
             </div>
             <div style={{padding:'20px', borderRadius:'18px', border:'1px solid var(--border)', background:'var(--s1)'}}>
               <h3 style={{fontSize:'11px', fontWeight:'600', letterSpacing:'2px', textTransform:'uppercase', color:'var(--sub)', marginBottom:'12px'}}>Room Code</h3>
               <input type="text" value={codeInput} onChange={e => setCodeInput(e.target.value.toUpperCase())} placeholder="ABC12" maxLength="5" style={{textAlign:'center', letterSpacing:'6px', fontFamily:'JetBrains Mono', fontWeight:'bold', marginBottom:'12px'}} />
-              <button className="btn btn-cyan" style={{marginBottom:0}} onClick={attemptJoinRoom}>Join Room</button>
+              <button className="btn-cyan" style={{marginBottom:0}} onClick={attemptJoinRoom}>Join Room</button>
             </div>
           </div>
         </div>
@@ -584,22 +786,46 @@ function App() {
                   📲 Show QR
                 </button>
               </div>
-
             </div>
-            <button className="btn btn-sm btn-red" onClick={() => { sessionStorage.removeItem('hushpod_session'); window.location.reload(); }} style={{margin: 0, width:'auto'}}>Leave</button>
+            <button className="btn-sm btn-red" onClick={() => { sessionStorage.removeItem('hushpod_session'); window.location.reload(); }} style={{margin: 0, width:'auto'}}>Leave</button>
           </div>
           
           <div className="rbody" style={{flex:1, padding:'16px', maxWidth:'660px', margin:'0 auto', width:'100%', display:'flex', flexDirection:'column', gap:'14px', zIndex:1}}>
             
             <div style={{display:'flex', background:'var(--s2)', borderRadius:'12px', padding:'4px', border:'1px solid var(--border)'}}>
-              <button onClick={()=>setRoomTab('party')} style={{flex:1, padding:'10px', background: roomTab === 'party' ? 'var(--s1)' : 'transparent', color: roomTab==='party' ? 'var(--cyan)' : 'var(--sub)', border:'none', borderRadius:'8px', fontWeight:'600', cursor:'pointer'}}>Party Hall</button>
-              <button onClick={()=>setRoomTab('dj')} style={{flex:1, padding:'10px', background: roomTab === 'dj' ? 'var(--s1)' : 'transparent', color: roomTab==='dj' ? 'var(--cyan)' : 'var(--sub)', border:'none', borderRadius:'8px', fontWeight:'600', cursor:'pointer'}}>DJ Console</button>
-              <button onClick={()=>setRoomTab('settings')} style={{flex:1, padding:'10px', background: roomTab === 'settings' ? 'var(--s1)' : 'transparent', color: roomTab==='settings' ? 'var(--cyan)' : 'var(--sub)', border:'none', borderRadius:'8px', fontWeight:'600', cursor:'pointer'}}>Settings</button>
+              <button onClick={()=>setRoomTab('party')} style={{flex:1, padding:'10px 5px', background: roomTab === 'party' ? 'var(--s1)' : 'transparent', color: roomTab==='party' ? 'var(--cyan)' : 'var(--sub)', border:'none', borderRadius:'8px', fontWeight:'600', cursor:'pointer', fontSize:'13px'}}>Party Hall</button>
+              <button onClick={()=>setRoomTab('dj')} style={{flex:1, padding:'10px 5px', background: roomTab === 'dj' ? 'var(--s1)' : 'transparent', color: roomTab==='dj' ? 'var(--cyan)' : 'var(--sub)', border:'none', borderRadius:'8px', fontWeight:'600', cursor:'pointer', fontSize:'13px'}}>DJ Console</button>
+              <button onClick={()=>setRoomTab('orbit')} style={{flex:1, padding:'10px 5px', background: roomTab === 'orbit' ? 'var(--s1)' : 'transparent', color: roomTab==='orbit' ? 'var(--pink)' : 'var(--sub)', border:'none', borderRadius:'8px', fontWeight:'600', cursor:'pointer', fontSize:'13px'}}>Orbit 3D</button>
+              <button onClick={()=>setRoomTab('settings')} style={{flex:1, padding:'10px 5px', background: roomTab === 'settings' ? 'var(--s1)' : 'transparent', color: roomTab==='settings' ? 'var(--cyan)' : 'var(--sub)', border:'none', borderRadius:'8px', fontWeight:'600', cursor:'pointer', fontSize:'13px'}}>Settings</button>
             </div>
 
-            {!amAdmin && (
+            {!amHost && (
               <div style={{display:'flex', alignItems:'center', gap:'8px', fontSize:'11px', color:'var(--sub)', fontFamily:"'JetBrains Mono',monospace", padding:'8px 12px', background:'var(--s2)', borderRadius:'8px'}}>
                 <div className={`sync-dot ${syncState.state}`} style={{width:'6px', height:'6px', borderRadius:'50%', background:'var(--green)'}}></div><span>{syncState.label}</span>
+              </div>
+            )}
+
+            {roomTab === 'orbit' && (
+              <div className="card" style={{padding: '10px'}}>
+                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', padding: '10px'}}>
+                  <div>
+                    <div style={{fontSize: '16px', fontWeight: '700', color: 'var(--pink)'}}>Spatial Orbit Engine</div>
+                    <div style={{fontSize: '12px', color: 'var(--sub)', marginTop: '4px'}}>Music physically travels around the room.</div>
+                  </div>
+                  {amHost && (
+                     <button className={orbitActive ? 'btn-pink' : 'btn-ghost'} style={{width: 'auto', margin: 0, padding: '8px 16px', borderRadius: '8px', fontSize: '12px'}} onClick={() => socketRef.current.emit('set-orbit', {active: !orbitActive})}>
+                       {orbitActive ? 'Active' : 'Turn On'}
+                     </button>
+                  )}
+                </div>
+                <div style={{width: '100%', height: '350px', background: '#0a0a14', borderRadius: '16px', position: 'relative', overflow: 'hidden', border: '1px solid var(--border)'}}>
+                  <canvas id="orbit-canvas" style={{width: '100%', height: '100%', display: 'block'}}></canvas>
+                  {!orbitActive && (
+                    <div style={{position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(10,10,20,0.8)', color: 'var(--sub)', fontSize: '13px', fontWeight: '600', letterSpacing: '1px'}}>
+                      ORBIT IS OFFLINE
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -608,25 +834,15 @@ function App() {
                 <div className="card">
                   <div className="card-label">Listeners <span style={{background:'var(--s3)', borderRadius:'20px', padding:'2px 8px', fontSize:'11px', color:'var(--cyan)'}}>{members.length}</span></div>
                   <div style={{display:'flex', flexDirection:'column', gap:'7px'}}>
-                    {members.map((m, i) => {
-                      const isTargetAdmin = admins.includes(m.id);
-                      return (
+                    {members.map((m, i) => (
                       <div key={i} style={{display:'flex', alignItems:'center', justifyContent:'space-between', background:'var(--s2)', border: m.isHost ? '1px solid rgba(247,37,133,.35)' : '1px solid var(--border)', borderRadius:'12px', padding:'10px 14px', fontSize:'13px', fontWeight:'500'}}>
                         <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
-                          <div style={{width:'7px', height:'7px', borderRadius:'50%', background: m.isHost ? 'var(--pink)' : isTargetAdmin ? 'var(--cyan)' : 'var(--green)', flexShrink:0}}></div>
+                          <div style={{width:'7px', height:'7px', borderRadius:'50%', background: m.isHost ? 'var(--pink)' : 'var(--green)', flexShrink:0}}></div>
                           <span>{m.name}</span>
                           {m.isHost && <span style={{fontSize:'10px', background:'rgba(247,37,133,.12)', color:'var(--pink)', borderRadius:'4px', padding:'1px 5px', fontWeight:'600'}}>HOST</span>}
-                          {!m.isHost && isTargetAdmin && <span style={{fontSize:'10px', background:'rgba(76,201,240,.12)', color:'var(--cyan)', borderRadius:'4px', padding:'1px 5px', fontWeight:'600'}}>ADMIN</span>}
                         </div>
-                        
-                        <div style={{display:'flex', gap:'8px', alignItems:'center'}}>
-                          {amHost && !isTargetAdmin && (
-                            <button className="btn-ghost" style={{padding:'4px 10px', fontSize:'11px', width:'auto', margin:0, borderRadius:'6px'}} onClick={() => socketRef.current.emit('make-admin', { targetId: m.id })}>⭐ Admin</button>
-                          )}
-                        </div>
-
                       </div>
-                    )})}
+                    ))}
                   </div>
                 </div>
 
@@ -646,7 +862,7 @@ function App() {
 
             {roomTab === 'dj' && (
               <>
-                {(amAdmin || guestUploads) && !currentSong && (
+                {(amHost || guestUploads) && !currentSong && (
                   <div className="upload-wrap" style={{border:'2px dashed var(--border)', borderRadius:'14px', padding:'26px 18px', textAlign:'center', cursor:'pointer', background:'var(--s2)', position:'relative'}}>
                     <input type="file" accept="audio/*" multiple onChange={e => uploadSongs(e.target.files)} style={{position:'absolute', inset:0, opacity:0, cursor:'pointer', width:'100%', height:'100%'}} />
                     <div style={{fontSize:'32px', marginBottom:'8px'}}>🎧</div><h3 style={{fontSize:'14px', fontWeight:'600', marginBottom:'3px'}}>Add up to 10 songs</h3><p style={{fontSize:'12px', color:'var(--sub)'}}>MP3 WAV FLAC AAC</p>
@@ -659,7 +875,7 @@ function App() {
                 
                 <div className="card">
                   {!currentSong ? (
-                    <div style={{textAlign:'center', padding:'28px 16px'}}><div style={{fontSize:'44px', marginBottom:'10px'}}>🎧</div><h3 style={{fontSize:'17px', fontWeight:'700', marginBottom:'5px'}}>No song yet</h3><p style={{fontSize:'13px', color:'var(--sub)'}}>{(amAdmin||guestUploads) ? 'Upload a song to start!' : 'Waiting for admin to add a song'}</p></div>
+                    <div style={{textAlign:'center', padding:'28px 16px'}}><div style={{fontSize:'44px', marginBottom:'10px'}}>🎧</div><h3 style={{fontSize:'17px', fontWeight:'700', marginBottom:'5px'}}>No song yet</h3><p style={{fontSize:'13px', color:'var(--sub)'}}>{(amHost||guestUploads) ? 'Upload a song to start!' : 'Waiting for host to add a song'}</p></div>
                   ) : (
                     <div>
                       <div style={{fontSize:'20px', fontWeight:'700', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', marginBottom:'3px'}}>{currentSong.name}</div>
@@ -676,7 +892,7 @@ function App() {
                         <div style={{display:'flex', justifyContent:'space-between', fontSize:'11px', color:'var(--sub)', fontFamily:"'JetBrains Mono',monospace"}}><span ref={tCurRef}>0:00</span><span>{audioBufferRef.current ? fmt(audioBufferRef.current.duration) : '0:00'}</span></div>
                       </div>
                       
-                      {amAdmin && (
+                      {amHost && (
                         <>
                           <div style={{display:'flex', justifyContent:'center', alignItems:'center', gap:'15px', marginTop:'10px'}}>
                             <button className="btn-ghost" style={{color: isShuffle ? 'var(--pink)' : 'var(--sub)', borderColor: isShuffle ? 'var(--pink)' : 'var(--border)', width:'40px', height:'40px', borderRadius:'8px', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => setIsShuffle(!isShuffle)}>🔀</button>
@@ -694,23 +910,23 @@ function App() {
                 </div>
 
                 <div className="card">
-                  <div className="card-label">Queue {(amAdmin || guestUploads) && currentSong && <button className="btn-ghost" style={{margin:0, padding: '4px 10px', width:'auto', borderRadius:'6px', fontSize:'11px'}} onClick={() => document.getElementById('q-file')?.click()}>+ Add</button>}</div>
-                  {(amAdmin || guestUploads) && <input type="file" id="q-file" style={{display:'none'}} accept="audio/*" multiple onChange={e => uploadSongs(e.target.files)} />}
+                  <div className="card-label">Queue {(amHost || guestUploads) && currentSong && <button className="btn-ghost" style={{margin:0, padding: '4px 10px', width:'auto', borderRadius:'6px', fontSize:'11px'}} onClick={() => document.getElementById('q-file')?.click()}>+ Add</button>}</div>
+                  {(amHost || guestUploads) && <input type="file" id="q-file" style={{display:'none'}} accept="audio/*" multiple onChange={e => uploadSongs(e.target.files)} />}
                   
                   <div style={{display:'flex', flexDirection:'column', gap:'8px'}}>
                     {queue.length === 0 ? <div style={{fontSize:'13px', color:'var(--sub)', textAlign:'center', padding:'12px 0'}}>No songs queued</div> : queue.map((s, i) => (
                       <div key={s.id} 
-                        draggable={amAdmin}
+                        draggable={amHost}
                         onDragStart={() => setDraggedIdx(i)}
                         onDragOver={(e) => e.preventDefault()}
                         onDrop={(e) => handleDrop(e, i)}
-                        style={{background:'var(--s2)', padding:'10px 14px', borderRadius:'12px', fontSize:'14px', display:'flex', justifyContent:'space-between', alignItems:'center', border: currentSong?.id === s.id ? '1px solid var(--pink)' : '1px solid var(--border)', fontWeight:'500', cursor: amAdmin ? 'grab' : 'default', opacity: draggedIdx === i ? 0.5 : 1}}
+                        style={{background:'var(--s2)', padding:'10px 14px', borderRadius:'12px', fontSize:'14px', display:'flex', justifyContent:'space-between', alignItems:'center', border: currentSong?.id === s.id ? '1px solid var(--pink)' : '1px solid var(--border)', fontWeight:'500', cursor: amHost ? 'grab' : 'default', opacity: draggedIdx === i ? 0.5 : 1}}
                       >
-                        {amAdmin && <span style={{marginRight:'10px', cursor:'grab', color:'var(--sub)'}}>☰</span>}
+                        {amHost && <span style={{marginRight:'10px', cursor:'grab', color:'var(--sub)'}}>☰</span>}
                         <div style={{flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{s.name}</div>
-                        {amAdmin && currentSong?.id !== s.id && <button className="btn-ghost" style={{fontSize:'12px', color:'var(--cyan)', fontWeight:'600', padding:'4px 10px', borderRadius:'6px', border:'1px solid rgba(76,201,240,.3)', background:'var(--s3)', cursor:'pointer', flexShrink:0, width:'auto', margin:0}} onClick={() => socketRef.current.emit('play-song', { songId: s.id, autoPlay: true })}>Play</button>}
+                        {amHost && currentSong?.id !== s.id && <button className="btn-ghost" style={{fontSize:'12px', color:'var(--cyan)', fontWeight:'600', padding:'4px 10px', borderRadius:'6px', border:'1px solid rgba(76,201,240,.3)', background:'var(--s3)', cursor:'pointer', flexShrink:0, width:'auto', margin:0}} onClick={() => socketRef.current.emit('play-song', { songId: s.id, autoPlay: true })}>Play</button>}
                         {currentSong?.id === s.id && <span style={{fontSize:'11px', color:'var(--cyan)', fontWeight:'bold'}}>NOW</span>}
-                        {currentSong?.id !== s.id && !amAdmin && <button className="btn-ghost" style={{background:'var(--s3)', color:'var(--cyan)', border:'1px solid rgba(76,201,240,.3)', padding:'4px 10px', borderRadius:'6px', cursor:'pointer', fontWeight:'700', fontSize:'11px', width:'auto', margin:0}} onClick={() => socketRef.current.emit('upvote', { songId: s.id })}>▲ {s.upvotes || 0}</button>}
+                        {currentSong?.id !== s.id && !amHost && <button className="btn-ghost" style={{background:'var(--s3)', color:'var(--cyan)', border:'1px solid rgba(76,201,240,.3)', padding:'4px 10px', borderRadius:'6px', cursor:'pointer', fontWeight:'700', fontSize:'11px', width:'auto', margin:0}} onClick={() => socketRef.current.emit('upvote', { songId: s.id })}>▲ {s.upvotes || 0}</button>}
                       </div>
                     ))}
                   </div>
@@ -720,7 +936,7 @@ function App() {
 
             {roomTab === 'settings' && (
               <>
-                {amAdmin ? (
+                {amHost ? (
                   <>
                     <div className="card">
                       <div className="card-label">Audio Settings</div>
@@ -733,26 +949,24 @@ function App() {
                       <p style={{fontSize:'11px', color:'var(--sub)', marginTop:'8px'}}>This adjusts the volume for everyone in the room instantly.</p>
                     </div>
 
-                    {amHost && (
-                      <div className="card">
-                        <div className="card-label">Host Permissions</div>
-                        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', background:'var(--s2)', padding:'15px', borderRadius:'12px', border:'1px solid var(--border)'}}>
-                          <div>
-                            <div style={{fontWeight:'600', fontSize:'14px'}}>Allow Guests to Upload</div>
-                            <div style={{fontSize:'11px', color:'var(--sub)', marginTop:'2px'}}>Let listeners add songs to the queue</div>
-                          </div>
-                          <button className={guestUploads ? 'btn-cyan' : 'btn-ghost'} style={{width:'auto', margin:0, padding:'8px 16px', borderRadius:'8px', fontSize:'13px'}} onClick={() => socketRef.current.emit('toggle-guest-uploads', {allowed: !guestUploads})}>
-                            {guestUploads ? 'Enabled' : 'Disabled'}
-                          </button>
+                    <div className="card">
+                      <div className="card-label">Host Permissions</div>
+                      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', background:'var(--s2)', padding:'15px', borderRadius:'12px', border:'1px solid var(--border)'}}>
+                        <div>
+                          <div style={{fontWeight:'600', fontSize:'14px'}}>Allow Guests to Upload</div>
+                          <div style={{fontSize:'11px', color:'var(--sub)', marginTop:'2px'}}>Let listeners add songs to the queue</div>
                         </div>
+                        <button className={guestUploads ? 'btn-cyan' : 'btn-ghost'} style={{width:'auto', margin:0, padding:'8px 16px', borderRadius:'8px', fontSize:'13px'}} onClick={() => socketRef.current.emit('toggle-guest-uploads', {allowed: !guestUploads})}>
+                          {guestUploads ? 'Enabled' : 'Disabled'}
+                        </button>
                       </div>
-                    )}
+                    </div>
                   </>
                 ) : (
                   <div className="card" style={{textAlign:'center', padding:'30px'}}>
                     <div style={{fontSize:'32px', marginBottom:'10px'}}>🔒</div>
                     <div style={{fontSize:'16px', fontWeight:'600'}}>Settings Locked</div>
-                    <div style={{fontSize:'13px', color:'var(--sub)', marginTop:'5px'}}>Only Admins can change room settings.</div>
+                    <div style={{fontSize:'13px', color:'var(--sub)', marginTop:'5px'}}>Only the Host can change room settings.</div>
                   </div>
                 )}
               </>
@@ -805,31 +1019,6 @@ function App() {
           </div>
         </div>
       )}
-
-      <footer style={{ background:'var(--s1)', borderTop:'1px solid var(--border)', padding:'60px 40px 36px', marginTop:'auto' }}>
-        <div style={{ maxWidth:'1100px', margin:'0 auto' }}>
-          <div style={{ display:'flex', flexWrap:'wrap', gap:'48px', paddingBottom:'48px', borderBottom:'1px solid var(--border)', justifyContent:'space-between' }}>
-            <div style={{ flex:'1 1 260px' }}>
-              <a href="#" className="nav-logo" onClick={e => {e.preventDefault(); setView('marketing'); window.scrollTo(0,0);}} style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:'36px', letterSpacing:'3px', background:'linear-gradient(135deg,var(--pink),var(--cyan))', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', display:'block', marginBottom:'12px', textDecoration:'none'}}>HUSHPOD</a>
-              <p style={{fontSize:'13px', color:'var(--sub)', lineHeight:'1.7', maxWidth:'260px'}}>Synchronized private group audio. Listen together in perfect sync — no app, no account, no lag.</p>
-              <p style={{marginTop:'12px', fontSize:'12px', color:'var(--sub)'}}>Engineered by <span style={{color:'#bb86fc', fontWeight:'700'}}>Zentry Hub Pvt Ltd</span></p>
-            </div>
-            <div>
-              <h4 style={{fontSize:'11px', fontWeight:'700', color:'var(--sub)', letterSpacing:'2px', textTransform:'uppercase', marginBottom:'18px'}}>Product</h4>
-              <a style={{display:'block', fontSize:'13px', color:'var(--sub)', textDecoration:'none', marginBottom:'10px', cursor:'pointer'}} onClick={() => { setView('app-entry'); window.scrollTo(0,0); }}>Launch App</a>
-            </div>
-            <div>
-              <h4 style={{fontSize:'11px', fontWeight:'700', color:'var(--sub)', letterSpacing:'2px', textTransform:'uppercase', marginBottom:'18px'}}>Company</h4>
-              <a style={{display:'block', fontSize:'13px', color:'var(--sub)', textDecoration:'none', marginBottom:'10px', cursor:'pointer'}}>FAQ</a>
-              <a style={{display:'block', fontSize:'13px', color:'var(--sub)', textDecoration:'none', marginBottom:'10px', cursor:'pointer'}}>Terms of Service</a>
-            </div>
-          </div>
-          <div style={{ paddingTop:'28px', display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:'12px' }}>
-            <div style={{fontSize:'12px', color:'var(--sub)'}}>© 2026 HushPod · Built with ♥ in India</div>
-            <div style={{fontFamily:"'JetBrains Mono',monospace", fontSize:'11px', color:'var(--sub)'}}>v2.0.0 · Node.js + React · Zero data retention</div>
-          </div>
-        </div>
-      </footer>
     </>
   );
 }

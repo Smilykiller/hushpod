@@ -189,6 +189,43 @@ io.on('connection', (socket) => {
       io.to(roomCode).emit('settings-updated', { admins: room.admins, guestUploads: room.guestUploads, globalVolume: room.globalVolume });
     }
   });
+  socket.on('make-admin', ({ targetId }) => {
+    const room = rooms[roomCode];
+    if (room && room.hostId === socket.id && !room.admins.includes(targetId)) {
+      room.admins.push(targetId);
+      io.to(roomCode).emit('settings-updated', { admins: room.admins, guestUploads: room.guestUploads, globalVolume: room.globalVolume });
+    }
+  });
+
+  // --- PASTE THESE TWO NEW COMMANDS HERE ---
+  socket.on('remove-admin', ({ targetId }) => {
+    const room = rooms[roomCode];
+    // Only the host can remove an admin, and they cannot remove themselves
+    if (room && room.hostId === socket.id && targetId !== socket.id) {
+      room.admins = room.admins.filter(id => id !== targetId);
+      io.to(roomCode).emit('settings-updated', { admins: room.admins, guestUploads: room.guestUploads, globalVolume: room.globalVolume });
+    }
+  });
+
+  socket.on('transfer-host', ({ targetId }) => {
+    const room = rooms[roomCode];
+    if (room && room.hostId === socket.id) {
+      room.hostId = targetId; // Transfer the host ID
+      
+      // Ensure the new host is automatically in the admins array
+      if (!room.admins.includes(targetId)) room.admins.push(targetId);
+      
+      // Move the visually-displayed 'isHost' badge to the new person
+      Object.values(room.members).forEach(m => {
+        m.isHost = (m.id === targetId);
+      });
+      
+      // Broadcast the massive power shift to the room
+      io.to(roomCode).emit('settings-updated', { admins: room.admins, guestUploads: room.guestUploads, globalVolume: room.globalVolume });
+      io.to(roomCode).emit('member-joined', { members: Object.values(room.members) }); 
+    }
+  });
+  // -----------------------------------------
 
   socket.on('toggle-guest-uploads', ({ allowed }) => {
     const room = rooms[roomCode];
@@ -235,21 +272,40 @@ io.on('connection', (socket) => {
       io.to(roomCode).emit('queue-updated', { queue: getCleanQueue(room) });
     }
   });
-
-  socket.on('disconnect', () => {
+  socket.on('set-orbit', ({ active }) => {
+    const room = rooms[roomCode];
+    if (room && room.hostId === socket.id) {
+      room.orbitActive = active;
+      io.to(roomCode).emit('settings-updated', { admins: room.admins, guestUploads: room.guestUploads, globalVolume: room.globalVolume, orbitActive: room.orbitActive });
+    }
+  });
+ socket.on('disconnect', () => {
     try {
       const room = rooms[roomCode];
       if (!room) return;
       delete room.members[socket.id];
-      if (room.hostId === socket.id) { 
-        room.queue.forEach(s => { if (fs.existsSync(s.filePath)) fs.unlinkSync(s.filePath); });
-        io.to(roomCode).emit('host-left'); delete rooms[roomCode]; 
+      
+      // FIX: If Host leaves, auto-promote the oldest guest! Never stop the music.
+      if (room.hostId === socket.id) {
+        const remainingIds = Object.keys(room.members);
+        if (remainingIds.length > 0) {
+          const newHostId = remainingIds[0]; // The first person who joined
+          room.hostId = newHostId;
+          room.admins = [newHostId]; // Keep compatibility
+          room.members[newHostId].isHost = true;
+          
+          io.to(roomCode).emit('settings-updated', { admins: room.admins, guestUploads: room.guestUploads, globalVolume: room.globalVolume, orbitActive: room.orbitActive });
+          io.to(roomCode).emit('member-joined', { members: Object.values(room.members) });
+        } else {
+          // Only destroy the room if it is completely empty
+          room.queue.forEach(s => { if (fs.existsSync(s.filePath)) fs.unlinkSync(s.filePath); });
+          delete rooms[roomCode]; 
+        }
       } else {
         socket.to(roomCode).emit('member-left', { members: Object.values(room.members) });
       }
     } catch (err) {}
   });
-}); 
 
 // --- SERVE THE REACT FRONTEND ---
 app.use(express.static(path.join(__dirname, '../frontend/build')));
