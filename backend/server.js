@@ -252,5 +252,11 @@ io.on('connection', (socket) => {
   });
 }); 
 
+// Tell Node to serve the React frontend files
+app.use(express.static(path.join(__dirname, '../frontend/build')));
+app.get('*', (req, res) => { 
+  res.sendFile(path.join(__dirname, '../frontend/build', 'index.html')); 
+});
+
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => console.log(`HushPod Backend running on :${PORT}`));
