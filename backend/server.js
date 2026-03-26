@@ -70,7 +70,6 @@ app.post('/upload/:code', upload.array('songs', 10), (req, res) => {
     });
   });
   
-  // FIX 3: Strictly enforce a 10-song limit by removing the oldest song (that isn't currently playing)
   while (room.queue.length > 10) { 
     const idxToRemove = room.queue.findIndex(s => s.id !== room.currentSongId);
     if (idxToRemove !== -1) {
@@ -252,7 +251,7 @@ io.on('connection', (socket) => {
   });
 }); 
 
-// Tell Node to serve the React frontend files
+// --- SERVE THE REACT FRONTEND ---
 app.use(express.static(path.join(__dirname, '../frontend/build')));
 app.get('*', (req, res) => { 
   res.sendFile(path.join(__dirname, '../frontend/build', 'index.html')); 
