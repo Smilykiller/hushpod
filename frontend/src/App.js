@@ -15,7 +15,10 @@ function App() {
 
   const [uname, setUname] = useState('');
   const [roomCode, setRoomCode] = useState('');
-  const [isSyncing, setIsSyncing] = useState(false);
+  
+  // FIX: Loader starts true so it covers the initial page load
+  const [isSyncing, setIsSyncing] = useState(true);
+  
   const [codeInput, setCodeInput] = useState('');
   const [members, setMembers] = useState([]);
   const [queue, setQueue] = useState([]);
@@ -40,7 +43,7 @@ function App() {
   const audioBufferRef = useRef(null);
   const sourceNodeRef = useRef(null);
   const gainNodeRef = useRef(null);
-  const pannerNodeRef = useRef(null); // ORBIT: Controls Left/Right Audio
+  const pannerNodeRef = useRef(null); 
   const analyserRef = useRef(null);
   
   const stateRef = useRef({ clockOff: 0, songOffset: 0, nodeStartTime: 0, localPlayState: false, amHost: false, queue: [], loop: false, shuffle: false, currentSongId: null, uname: '', members: [], globalVolume: 1.0, orbitActive: false });
@@ -52,6 +55,9 @@ function App() {
   const orbitRafRef = useRef(null);
   const audioOrbitRaf = useRef(null);
   const toastTmr = useRef(null);
+  
+  // FIX: Dynamic radar Delta Time reference
+  const radarRef = useRef({ angle: 0, lastTime: Date.now() });
 
   const toast = (msg, type = 'inf') => {
     setToastData({ msg, type, visible: true });
@@ -59,9 +65,7 @@ function App() {
     toastTmr.current = setTimeout(() => setToastData(t => ({ ...t, visible: false })), 3000);
   };
 
-  // Safely find our user in the room list to see if we are the Host
-  const myMemberData = members.find(m => m.id === socketRef.current?.id);
-  const amHost = myMemberData ? myMemberData.isHost : false;
+  const amHost = members.find(m => m.id === socketRef.current?.id)?.isHost || false;
 
   useEffect(() => {
     stateRef.current.queue = queue;
@@ -74,6 +78,21 @@ function App() {
     stateRef.current.globalVolume = globalVolume;
     stateRef.current.orbitActive = orbitActive;
   }, [queue, isLooping, isShuffle, currentSong, uname, amHost, members, globalVolume, orbitActive]);
+
+  // FIX: Web Audio Autoplay Unlocker
+  useEffect(() => {
+    const unlockAudio = () => {
+      if (actxRef.current && actxRef.current.state === 'suspended') {
+        actxRef.current.resume();
+      }
+    };
+    window.addEventListener('click', unlockAudio);
+    window.addEventListener('touchstart', unlockAudio);
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+  }, []);
 
   useEffect(() => {
     if (view === 'marketing') {
@@ -94,7 +113,20 @@ function App() {
       
       initSystem().then(() => {
         socketRef.current.emit('join-room', { code, name, claimHost: false }, (res) => {
-          if (res.error) { sessionStorage.removeItem('hushpod_session'); return; }
+          if (res.error) { 
+            sessionStorage.removeItem('hushpod_session'); 
+            setIsSyncing(false);
+            return toast(res.error, 'err'); 
+          }
+
+          // FIX: 15 Person Limit check on reconnect
+          if (res.members && res.members.length > 15) {
+             sessionStorage.removeItem('hushpod_session');
+             socketRef.current.disconnect(); socketRef.current = null;
+             setIsSyncing(false);
+             return toast('Room is full (Max 15)!', 'err');
+          }
+
           setRoomCode(code); setMembers(res.members); setQueue(res.queue);
           setGuestUploads(res.guestUploads); setGlobalVolume(res.globalVolume); setOrbitActive(res.orbitActive || false);
           
@@ -105,9 +137,12 @@ function App() {
             setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
             guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true);
           }
+          setIsSyncing(false);
           setRoomTab('dj'); setView('room');
         });
       });
+    } else {
+      setIsSyncing(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -170,13 +205,11 @@ function App() {
   const initSystem = async () => {
     if (!actxRef.current) {
       actxRef.current = new (window.AudioContext || window.webkitAudioContext)();
-      
       gainNodeRef.current = actxRef.current.createGain();
+      pannerNodeRef.current = actxRef.current.createStereoPanner ? actxRef.current.createStereoPanner() : actxRef.current.createGain();
       analyserRef.current = actxRef.current.createAnalyser();
       analyserRef.current.fftSize = 128;
-      pannerNodeRef.current = actxRef.current.createStereoPanner ? actxRef.current.createStereoPanner() : actxRef.current.createGain();
       
-      // The Safe Audio Graph: Panner -> Analyser -> Gain -> Speakers
       pannerNodeRef.current.connect(analyserRef.current);
       analyserRef.current.connect(gainNodeRef.current);
       gainNodeRef.current.connect(actxRef.current.destination);
@@ -191,6 +224,13 @@ function App() {
     if (!socketRef.current) {
       socketRef.current = io(SERVER, { transports: ['websocket', 'polling'] });
       setupSocketListeners(socketRef.current);
+      
+      // FIX: Silent Reconnect if connection drops
+      socketRef.current.on('connect', () => {
+         if (stateRef.current.uname && roomCode) {
+             socketRef.current.emit('join-room', { code: roomCode, name: stateRef.current.uname, claimHost: false }, () => {});
+         }
+      });
     }
   };
 
@@ -202,13 +242,14 @@ function App() {
         const r = await fetch(SERVER + '/clocksync', { cache: 'no-store' });
         const { t } = await r.json();
         const t4 = Date.now();
-        const rtt = t4 - t1;
-        samples.push({ offset: t + (rtt / 2) - Date.now(), rtt });
+        samples.push({ offset: t + ((t4 - t1) / 2) - Date.now(), rtt: t4 - t1 });
       } catch {}
     }
     if (samples.length > 0) {
+      // FIX: Average the 3 fastest pings for stability
       samples.sort((a, b) => a.rtt - b.rtt);
-      stateRef.current.clockOff = samples[0].offset;
+      const best = samples.slice(0, 3);
+      stateRef.current.clockOff = best.reduce((sum, s) => sum + s.offset, 0) / best.length;
     }
   };
 
@@ -229,8 +270,7 @@ function App() {
     sourceNodeRef.current = actxRef.current.createBufferSource();
     sourceNodeRef.current.buffer = audioBufferRef.current;
     
-    // Connect audio file directly to Orbit Panner
-    sourceNodeRef.current.connect(pannerNodeRef.current);
+    sourceNodeRef.current.connect(pannerNodeRef.current); 
 
     sourceNodeRef.current.onended = () => {
       const s = stateRef.current;
@@ -238,12 +278,9 @@ function App() {
         if (s.amHost) {
           const q = s.queue;
           if (q.length > 0) {
-            if (s.loop) {
-              socketRef.current.emit('play-song', { songId: s.currentSongId, autoPlay: true });
-            } else if (s.shuffle) {
-              const randomSong = q[Math.floor(Math.random() * q.length)];
-              socketRef.current.emit('play-song', { songId: randomSong.id, autoPlay: true });
-            } else {
+            if (s.loop) { socketRef.current.emit('play-song', { songId: s.currentSongId, autoPlay: true }); } 
+            else if (s.shuffle) { socketRef.current.emit('play-song', { songId: q[Math.floor(Math.random() * q.length)].id, autoPlay: true }); } 
+            else {
               const idx = q.findIndex(x => x.id === s.currentSongId);
               if (idx !== -1 && idx < q.length - 1) socketRef.current.emit('play-song', { songId: q[idx + 1].id, autoPlay: true });
               else { socketRef.current.emit('song-ended', {}); setCurrentSong(null); }
@@ -261,7 +298,6 @@ function App() {
   const guestLoadAndSync = async (url, playState, isNewJoiner = false) => {
     stopAudio(); audioBufferRef.current = null;
     if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Downloading track...' });
-    
     try {
       const res = await fetch(url);
       const arrayBuffer = await res.arrayBuffer();
@@ -273,16 +309,13 @@ function App() {
   const applyPlayState = (playing, currentTime, ts, isNewJoiner = false) => {
     if (!audioBufferRef.current) return;
     const elapsed = (Date.now() + stateRef.current.clockOff - ts) / 1000;
-    
     if (!playing) { 
       stopAudio(); stateRef.current.songOffset = currentTime; 
-      if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Paused' });
-      return; 
+      if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Paused' }); return; 
     }
     
     let expectedOffset = currentTime + elapsed;
     let startTime = actxRef.current.currentTime + 0.05;
-
     if (expectedOffset < 0) { startTime = actxRef.current.currentTime + Math.abs(expectedOffset); expectedOffset = 0; }
     
     if (isNewJoiner && !stateRef.current.amHost && expectedOffset > 0) {
@@ -292,7 +325,6 @@ function App() {
     } else {
         if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Locked Sync' });
     }
-
     if (expectedOffset >= audioBufferRef.current.duration) { stopAudio(); return; }
     playAudioAt(expectedOffset, startTime);
   };
@@ -306,7 +338,6 @@ function App() {
   const drawVisualizer = () => {
     if (!stateRef.current.localPlayState || !analyserRef.current) return;
     vizRafRef.current = requestAnimationFrame(drawVisualizer);
-    
     const cvs = document.getElementById('viz-canvas');
     if(!cvs) return; const ctx = cvs.getContext('2d'); if(!ctx) return;
     
@@ -314,13 +345,10 @@ function App() {
     const data = new Uint8Array(analyserRef.current.frequencyBinCount);
     analyserRef.current.getByteFrequencyData(data); ctx.clearRect(0, 0, W, H);
     
-    const style = getComputedStyle(document.body);
-    const pColor = style.getPropertyValue('--cyan').trim() || '#4cc9f0';
-    
     const bw = (W / data.length) * 2.5; let x = 0;
     for(let i=0; i<data.length; i++) {
       const bh = (data[i] / 255) * H;
-      ctx.fillStyle = pColor; ctx.fillRect(x, H - bh, bw, bh); x += bw + 1;
+      ctx.fillStyle = '#4cc9f0'; ctx.fillRect(x, H - bh, bw, bh); x += bw + 1;
     }
     
     let currentPos = Math.max(0, Math.min(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime), audioBufferRef.current?.duration || 1));
@@ -328,7 +356,7 @@ function App() {
     if (tCurRef.current) tCurRef.current.textContent = fmt(currentPos);
   };
 
-  // --- ORBIT MODE LOGIC ---
+  // --- ORBIT MODE AUDIO ENGINE & VISUALS ---
   useEffect(() => {
     const runOrbitUI = () => {
       if (roomTab !== 'orbit') return;
@@ -338,11 +366,9 @@ function App() {
       const W = cvs.width = cvs.offsetWidth; const H = cvs.height = cvs.offsetHeight;
       const cx = W/2, cy = H/2; const radius = Math.min(W, H) * 0.35;
       
-      const speedMs = 12000;
-      const radarAngle = (((Date.now() + stateRef.current.clockOff) % speedMs) / speedMs) * Math.PI * 2;
+      const radarAngle = radarRef.current.angle;
 
       ctx.fillStyle = 'rgba(10, 10, 20, 0.4)'; ctx.fillRect(0, 0, W, H);
-      
       ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI*2);
       ctx.strokeStyle = 'rgba(76,201,240,0.15)'; ctx.lineWidth = 1; ctx.stroke();
 
@@ -380,32 +406,41 @@ function App() {
   useEffect(() => {
     const updateAudioOrbit = () => {
       audioOrbitRaf.current = requestAnimationFrame(updateAudioOrbit);
+      
+      const now = Date.now();
+      const dt = now - radarRef.current.lastTime;
+      radarRef.current.lastTime = now;
+
+      // FIX: Dynamic Orbit Speed!
+      const total = stateRef.current.members.length || 1;
+      const speedMs = Math.max(3000, 2000 * total); 
+      const angularVelocity = (Math.PI * 2) / speedMs;
+      
+      radarRef.current.angle = (radarRef.current.angle + (angularVelocity * dt)) % (Math.PI * 2);
+
       if (!stateRef.current.orbitActive || !pannerNodeRef.current || !pannerNodeRef.current.pan) {
         if (pannerNodeRef.current && pannerNodeRef.current.pan) pannerNodeRef.current.pan.setTargetAtTime(0, actxRef.current.currentTime, 0.1);
         if (gainNodeRef.current) gainNodeRef.current.gain.setTargetAtTime(stateRef.current.globalVolume, actxRef.current.currentTime, 0.1);
         return;
       }
       
-      const total = stateRef.current.members.length || 1;
       const myIdx = stateRef.current.members.findIndex(m => m.id === socketRef.current?.id);
       if (myIdx === -1) return;
       const myAngle = (myIdx / total) * Math.PI * 2;
       
-      const speedMs = 12000;
-      const radarAngle = (((Date.now() + stateRef.current.clockOff) % speedMs) / speedMs) * Math.PI * 2;
-      
-      let diff = Math.abs(radarAngle - myAngle);
+      let diff = Math.abs(radarRef.current.angle - myAngle);
       if (diff > Math.PI) diff = Math.PI * 2 - diff;
       
       const vol = 0.2 + 0.8 * Math.max(0, Math.cos(diff));
       gainNodeRef.current.gain.setTargetAtTime(vol * stateRef.current.globalVolume, actxRef.current.currentTime, 0.1);
       
-      const panRaw = Math.sin(radarAngle - myAngle);
+      const panRaw = Math.sin(radarRef.current.angle - myAngle);
       pannerNodeRef.current.pan.setTargetAtTime(panRaw, actxRef.current.currentTime, 0.1);
     };
     updateAudioOrbit();
     return () => cancelAnimationFrame(audioOrbitRaf.current);
   }, []);
+  // ----------------------------------------
 
   const setupSocketListeners = (sock) => {
     sock.on('song-changed', ({ songId, name, streamUrl, playState }) => {
@@ -428,48 +463,40 @@ function App() {
       const elapsed = (sNow() - ts) / 1000;
       const expectedTime = currentTime + elapsed;
       const actualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
-      
-      if (Math.abs(expectedTime - actualTime) > 0.4) {
-        applyPlayState(true, currentTime, ts, false);
-      }
+      if (Math.abs(expectedTime - actualTime) > 0.4) applyPlayState(true, currentTime, ts, false);
     });
 
     sock.on('queue-updated', ({ queue }) => setQueue(queue));
     
     sock.on('chat-msg', ({ name, text }) => { 
       setChat(prev => [...prev, { name, text }]); 
-      if (name !== stateRef.current.uname) { toast(`💬 ${name}: ${text}`, 'inf'); }
+      if (name !== stateRef.current.uname) toast(`💬 ${name}: ${text}`, 'inf');
       setTimeout(() => { if (chatBoxRef.current) chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight; }, 10); 
     });
     
     sock.on('settings-updated', (s) => {
-      setGuestUploads(s.guestUploads); 
-      setGlobalVolume(s.globalVolume);
-      setOrbitActive(s.orbitActive);
+      setGuestUploads(s.guestUploads); setGlobalVolume(s.globalVolume); setOrbitActive(s.orbitActive);
       if (gainNodeRef.current && actxRef.current && !s.orbitActive) gainNodeRef.current.gain.setValueAtTime(s.globalVolume, actxRef.current.currentTime);
     });
 
-    sock.on('member-joined', ({ members }) => { setMembers(members); });
-    sock.on('member-left', ({ members }) => { setMembers(members); });
+    sock.on('member-joined', ({ members }) => setMembers(members));
+    sock.on('member-left', ({ members }) => setMembers(members));
+    
     sock.on('host-left', () => { 
       sessionStorage.removeItem('hushpod_session');
-      toast('Host ended the room', 'err'); 
+      toast('Room closed', 'err'); 
       setTimeout(() => window.location.reload(), 2000); 
     });
   };
 
   const attemptCreateRoom = () => {
     if (!uname.trim()) return toast('Enter your name first', 'err');
-    setPendingAction('create');
-    setTosChecked(false);
-    setModals({ ...modals, tos: true });
+    setPendingAction('create'); setTosChecked(false); setModals({ ...modals, tos: true });
   };
 
   const attemptJoinRoom = () => {
     if (!uname.trim() || codeInput.length < 3) return toast('Enter name and code', 'err');
-    setPendingAction('join');
-    setTosChecked(false);
-    setModals({ ...modals, tos: true });
+    setPendingAction('join'); setTosChecked(false); setModals({ ...modals, tos: true });
   };
 
   const confirmTosAndExecute = async () => {
@@ -477,17 +504,12 @@ function App() {
     setModals({ ...modals, tos: false });
     
     if (pendingAction === 'create') {
-      setIsSyncing(true);
-      await initSystem();
+      setIsSyncing(true); await initSystem();
       socketRef.current.emit('create-room', { name: uname }, (res) => {
         setRoomCode(res.code); 
-        
-        // INSTANT HOST FIX
         setMembers([{ id: socketRef.current.id, name: uname, isHost: true }]);
-
         sessionStorage.setItem('hushpod_session', JSON.stringify({ code: res.code, name: uname }));
-        setIsSyncing(false);
-        setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
+        setIsSyncing(false); setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
         document.title = `HushPod | ${uname}'s Party`;
         setInterval(() => {
           const s = stateRef.current;
@@ -496,23 +518,26 @@ function App() {
       });
     } 
     else if (pendingAction === 'join') {
-      setIsSyncing(true);
-      await initSystem();
+      setIsSyncing(true); await initSystem();
       socketRef.current.emit('join-room', { code: codeInput, name: uname, claimHost: false }, (res) => {
         if (res.error) { setIsSyncing(false); return toast(res.error, 'err'); }
+        
+        // FIX: Capacity Limit Check!
+        if (res.members && res.members.length > 15) {
+             setIsSyncing(false);
+             socketRef.current.disconnect(); socketRef.current = null;
+             sessionStorage.removeItem('hushpod_session');
+             return toast('Room is full (Max 15 people)!', 'err');
+        }
+
         sessionStorage.setItem('hushpod_session', JSON.stringify({ code: codeInput, name: uname }));
         setRoomCode(codeInput); setMembers(res.members); setQueue(res.queue);
         setGuestUploads(res.guestUploads); setGlobalVolume(res.globalVolume); setOrbitActive(res.orbitActive || false);
         
         const hostUser = res.members.find(m => m.isHost);
         document.title = `HushPod | ${hostUser ? hostUser.name : 'Room'}'s Party`;
-
-        if(res.currentSong) {
-          setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
-          guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true);
-        }
-        setIsSyncing(false);
-        setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
+        if(res.currentSong) { setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name }); guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true); }
+        setIsSyncing(false); setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
       });
     }
   };
@@ -529,8 +554,7 @@ function App() {
     if (!amHost || !audioBufferRef.current) return;
     const r = e.currentTarget.getBoundingClientRect();
     const percent = (e.clientX - r.left) / r.width;
-    const t = Math.max(0, Math.min(audioBufferRef.current.duration, percent * audioBufferRef.current.duration));
-    handleSeek(t);
+    handleSeek(Math.max(0, Math.min(audioBufferRef.current.duration, percent * audioBufferRef.current.duration)));
   };
 
   const uploadSongs = (files) => {
@@ -538,10 +562,7 @@ function App() {
     if (!amHost && !guestUploads) return toast('Host has locked uploads', 'err');
     
     let filesToUpload = Array.from(files);
-    if (filesToUpload.length > 10) {
-      toast('Max 10 files allowed. Slicing list.', 'inf');
-      filesToUpload = filesToUpload.slice(0, 10);
-    }
+    if (filesToUpload.length > 10) { toast('Max 10 files. Slicing list.', 'inf'); filesToUpload = filesToUpload.slice(0, 10); }
 
     setUploadProgress(1); const fd = new FormData();
     for (let i = 0; i < filesToUpload.length; i++) fd.append('songs', filesToUpload[i]);
@@ -550,10 +571,8 @@ function App() {
     const xhr = new XMLHttpRequest(); xhr.open('POST', SERVER + '/upload/' + roomCode);
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100)); };
     xhr.onload = () => { 
-      setUploadProgress(0); 
-      if (xhr.status !== 200) toast('Upload failed', 'err'); 
-      const fileInput = document.getElementById('q-file');
-      if (fileInput) fileInput.value = "";
+      setUploadProgress(0); if (xhr.status !== 200) toast('Upload failed', 'err'); 
+      const fileInput = document.getElementById('q-file'); if (fileInput) fileInput.value = "";
     };
     xhr.send(fd);
   };
@@ -561,26 +580,20 @@ function App() {
   const handleGlobalVolume = (e) => {
     if(!amHost) return;
     const val = parseFloat(e.target.value);
-    setGlobalVolume(val);
-    socketRef.current.emit('set-global-volume', { volume: val });
+    setGlobalVolume(val); socketRef.current.emit('set-global-volume', { volume: val });
     if (gainNodeRef.current && actxRef.current && !orbitActive) gainNodeRef.current.gain.setValueAtTime(val, actxRef.current.currentTime);
   };
 
   const handleChat = () => { if (!chatInput.trim()) return; socketRef.current.emit('chat-msg', { text: chatInput.trim() }); setChatInput(''); };
   
   const handleDrop = (e, index) => {
-    e.preventDefault();
-    if (draggedIdx === null || draggedIdx === index) return;
-    const newQ = [...queue];
-    const [moved] = newQ.splice(draggedIdx, 1);
-    newQ.splice(index, 0, moved);
-    setQueue(newQ);
-    socketRef.current.emit('reorder-queue', { newOrder: newQ.map(q => q.id) });
-    setDraggedIdx(null);
+    e.preventDefault(); if (draggedIdx === null || draggedIdx === index) return;
+    const newQ = [...queue]; const [moved] = newQ.splice(draggedIdx, 1); newQ.splice(index, 0, moved);
+    setQueue(newQ); socketRef.current.emit('reorder-queue', { newOrder: newQ.map(q => q.id) }); setDraggedIdx(null);
   };
 
-  const hostUser = members.find(m => m.isHost);
-  const roomTitle = hostUser ? `${hostUser.name}'s Party` : 'ROOM';
+  const currentHost = members.find(m => m.isHost);
+  const roomTitle = currentHost ? `${currentHost.name}'s Party` : 'ROOM';
 
   return (
     <>
@@ -596,9 +609,8 @@ function App() {
         </div>
       )}
 
-      {view === 'marketing' && (
+      {view === 'marketing' && !isSyncing && (
         <div className="scr on" id="landing" style={{ display: 'block' }}>
-          
           <nav>
             <a href="#marketing" className="nav-logo" onClick={e => { e.preventDefault(); window.scrollTo(0,0); }}>HUSHPOD</a>
             <div className="nav-links">
@@ -610,7 +622,7 @@ function App() {
             </div>
             <a href="#app" className="nav-cta" onClick={(e) => { e.preventDefault(); setView('app-entry'); window.scrollTo(0,0); }}>Start Listening Free →</a>
           </nav>
-
+          
           <div className="wrap">
             {/* ══ HERO ══ */}
             <section className="hero">
@@ -621,7 +633,7 @@ function App() {
                 <strong>No app. No account. No lag.</strong> Just open, create a room, and everyone hears the same song at the exact same millisecond.
               </p>
               <div className="hero-btns">
-                <button className="btn-hero-primary" onClick={() => { setView('app-entry'); window.scrollTo(0,0); }}>🎉 Create a Room Free</button>
+                <button className="btn btn-pink btn-sm" onClick={() => { setView('app-entry'); window.scrollTo(0,0); }}>🎉 Create a Room Free</button>
                 <a href="#how" className="btn-hero-secondary" onClick={e => { e.preventDefault(); document.getElementById('how')?.scrollIntoView({behavior: 'smooth'}); }}>See How It Works</a>
               </div>
 
@@ -664,9 +676,9 @@ function App() {
                 <p className="section-sub" style={{ margin: '0 auto' }}>No downloads. No sign-up. Works in any browser on any phone.</p>
               </div>
               <div className="steps-grid">
-                <div className="step-card reveal"><div className="step-icon">🎙️</div><div className="step-num">01</div><div className="step-title">Create a Room</div><div className="step-desc">Enter your name, tap "Create Party Room". You get a unique 5-character room code instantly. Upload up to 10 songs from your device.</div></div>
-                <div className="step-card reveal" style={{ transitionDelay: '.1s' }}><div className="step-icon">📲</div><div className="step-num">02</div><div className="step-title">Share the Code</div><div className="step-desc">Send your room code or QR code to friends. They open HushPod in their browser, type the code, and they're in.</div></div>
-                <div className="step-card reveal" style={{ transitionDelay: '.2s' }}><div className="step-icon">🎧</div><div className="step-num">03</div><div className="step-title">Listen Together</div><div className="step-desc">Everyone hears the same audio at the same millisecond. The host controls play, pause, and the queue.</div></div>
+                <div className="step-card reveal"><div className="step-icon">🎙️</div><div className="step-num">01</div><div className="step-title">Create a Room</div><div className="step-desc">Enter your name, tap "Create Party Room". You get a unique 5-character room code instantly. Upload up to 10 songs from your device — MP3, WAV, FLAC, AAC all supported.</div></div>
+                <div className="step-card reveal" style={{ transitionDelay: '.1s' }}><div className="step-icon">📲</div><div className="step-num">02</div><div className="step-title">Share the Code</div><div className="step-desc">Send your room code or QR code to friends. They open HushPod in their browser, type the code, and they're in — no installation required. Works on any smartphone.</div></div>
+                <div className="step-card reveal" style={{ transitionDelay: '.2s' }}><div className="step-icon">🎧</div><div className="step-num">03</div><div className="step-title">Listen Together</div><div className="step-desc">Everyone hears the same audio at the same millisecond. The host controls play, pause, and the queue. Guests can suggest songs via the chat. Perfect sync, guaranteed.</div></div>
                 <div className="step-card reveal" style={{ transitionDelay: '.3s' }}><div className="step-icon">🔄</div><div className="step-num">04</div><div className="step-title">Pass the Aux</div><div className="step-desc">If the host leaves, the next listener becomes DJ automatically — the party never stops.</div></div>
               </div>
             </section>
@@ -676,14 +688,21 @@ function App() {
               <div style={{ maxWidth: '1100px', margin: '0 auto', textAlign: 'center' }}>
                 <div className="section-label">✨ Everything Included</div>
                 <h2 className="section-title">Built for real<br/>group experiences</h2>
+                <p className="section-sub" style={{ margin: '0 auto' }}>Every feature engineered for low latency and high reliability.</p>
               </div>
               <div className="features-grid" style={{ maxWidth: '1100px', margin: '64px auto 0' }}>
-                <div className="feat-card reveal"><div className="feat-icon pink">🔴</div><div className="feat-title">Dead Reckoning Sync</div><div className="feat-desc">Between heartbeats, guests mathematically calculate the host's exact position.</div><span className="feat-badge badge-live">Live</span></div>
-                <div className="feat-card reveal" style={{ transitionDelay: '.05s' }}><div className="feat-icon cyan">⚡</div><div className="feat-title">Seeked Recalculation</div><div className="feat-desc">After every seek, we recalculate position — eliminating mobile seek latency.</div><span className="feat-badge badge-live">Live</span></div>
-                <div className="feat-card reveal" style={{ transitionDelay: '.1s' }}><div className="feat-icon green">🗓️</div><div className="feat-title">Scheduled Playback</div><div className="feat-desc">All devices receive a future server timestamp to begin playback simultaneously.</div><span className="feat-badge badge-live">Live</span></div>
-                <div className="feat-card reveal" style={{ transitionDelay: '.15s' }}><div className="feat-icon yellow">📦</div><div className="feat-title">Batch Upload (10 Songs)</div><div className="feat-desc">Upload your entire setlist at once. Auto-advance plays the next song seamlessly.</div><span className="feat-badge badge-live">Live</span></div>
-                <div className="feat-card reveal" style={{ transitionDelay: '.2s' }}><div className="feat-icon purple">💬</div><div className="feat-title">Song Suggestions Chat</div><div className="feat-desc">Built-in chat so guests can suggest what to play next in real-time.</div><span className="feat-badge badge-live">Live</span></div>
-                <div className="feat-card reveal" style={{ transitionDelay: '.25s' }}><div className="feat-icon indigo">🔗</div><div className="feat-title">QR Code Sharing</div><div className="feat-desc">One tap generates a QR code for your room. Anyone can scan it to join instantly.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal"><div className="feat-icon pink">🔴</div><div className="feat-title">Dead Reckoning Sync</div><div className="feat-desc">Between heartbeats, guests mathematically calculate the host's exact position — eliminating drift accumulation between server updates.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.05s' }}><div className="feat-icon cyan">⚡</div><div className="feat-title">Seeked Recalculation</div><div className="feat-desc">After every seek, we wait for the browser's seeked event then recalculate position — eliminating 100–200ms mobile seek latency from the sync equation.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.1s' }}><div className="feat-icon green">🗓️</div><div className="feat-title">Scheduled Playback</div><div className="feat-desc">When a song starts, all devices receive a future server timestamp to begin playback simultaneously — true atomic sync from the very first beat.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.15s' }}><div className="feat-icon yellow">📦</div><div className="feat-title">Batch Upload (10 Songs)</div><div className="feat-desc">Upload your entire setlist at once. Auto-advance plays the next song seamlessly when one ends. Drag and drop supported on desktop.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.2s' }}><div className="feat-icon purple">💬</div><div className="feat-title">Song Suggestions Chat</div><div className="feat-desc">Built-in chat so guests can suggest what to play next. Real-time messages delivered to everyone in the room instantly via WebSocket.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.25s' }}><div className="feat-icon indigo">🔗</div><div className="feat-title">QR Code Sharing</div><div className="feat-desc">One tap generates a QR code for your room. Anyone can scan it to join instantly — no typing required. URL auto-fills the room code on landing.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.3s' }}><div className="feat-icon pink">🌙</div><div className="feat-title">Screen-off Resilience</div><div className="feat-desc">Wake Lock API keeps your screen active. If your screen does turn off, reconnection re-syncs audio to the exact correct position within milliseconds.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.35s' }}><div className="feat-icon cyan">🎤</div><div className="feat-title">Pass the Aux</div><div className="feat-desc">Guests can request host privileges. The host can accept and pass full DJ control. If the host disconnects, the oldest listener auto-promotes.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.4s' }}><div className="feat-icon green">🔒</div><div className="feat-title">Zero Data Retention</div><div className="feat-desc">Audio lives in server RAM only during your session. When the room ends, everything is permanently deleted. No logs. No storage. No accounts needed.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.45s' }}><div className="feat-icon yellow">🔔</div><div className="feat-title">Lock Screen Controls</div><div className="feat-desc">Full Media Session API integration — play, pause, skip, and seek from your lock screen or notification shade. Custom artwork generated per room.</div><span className="feat-badge badge-live">Live</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.5s' }}><div className="feat-icon purple">♾️</div><div className="feat-title">Unlimited Listeners</div><div className="feat-desc">Free tier supports 15 listeners per room. Premium tier coming soon with unlimited participants, multiple simultaneous rooms, and lossless quality.</div><span className="feat-badge badge-soon">Coming Soon</span></div>
+                <div className="feat-card reveal" style={{ transitionDelay: '.55s' }}><div className="feat-icon indigo">🌐</div><div className="feat-title">Works Anywhere</div><div className="feat-desc">Same WiFi, different cities, across the world — HushPod works wherever your internet reaches. The sync engine handles network variance automatically.</div><span className="feat-badge badge-live">Live</span></div>
               </div>
             </section>
 
@@ -692,11 +711,82 @@ function App() {
               <div style={{ maxWidth: '1100px', margin: '0 auto', textAlign: 'center' }}>
                 <div className="section-label">🌍 Use Cases</div>
                 <h2 className="section-title">Made for every<br/>shared moment</h2>
+                <p className="section-sub" style={{ margin: '0 auto' }}>From silent discos to study halls — HushPod makes group audio effortless.</p>
               </div>
               <div className="cases-grid" style={{ maxWidth: '1100px', margin: '64px auto 0' }}>
-                <div className="case-card c1 reveal"><div className="case-emoji">🎉</div><div className="case-title">Silent Disco Parties</div><div className="case-desc">Replace expensive FM transmitters with HushPod. Everyone dances to the same beat.</div></div>
-                <div className="case-card c2 reveal" style={{ transitionDelay: '.08s' }}><div className="case-emoji">📚</div><div className="case-title">Synchronized Study</div><div className="case-desc">Study in sync with your friend group. Everyone hears the same lo-fi playlist.</div></div>
-                <div className="case-card c3 reveal" style={{ transitionDelay: '.16s' }}><div className="case-emoji">🚗</div><div className="case-title">Road Trips</div><div className="case-desc">Everyone in different cars hearing the exact same song at the same time.</div></div>
+                <div className="case-card c1 reveal"><div className="case-emoji">🎉</div><div className="case-title">Silent Disco Parties</div><div className="case-desc">Replace expensive FM transmitters with HushPod. Everyone dances to the same beat through their own earphones. No expensive hardware, no frequency clashes.</div></div>
+                <div className="case-card c2 reveal" style={{ transitionDelay: '.08s' }}><div className="case-emoji">📚</div><div className="case-title">Synchronized Study</div><div className="case-desc">Study in sync with your friend group. Everyone hears the same lo-fi playlist at the same moment — creates a shared focus atmosphere even across different locations.</div></div>
+                <div className="case-card c3 reveal" style={{ transitionDelay: '.16s' }}><div className="case-emoji">🚗</div><div className="case-title">Road Trips</div><div className="case-desc">Everyone in different cars hearing the exact same song at the same time. The convoy moves to one beat. The host controls the vibe for the whole group.</div></div>
+                <div className="case-card c4 reveal" style={{ transitionDelay: '.24s' }}><div className="case-emoji">🏋️</div><div className="case-title">Gym Classes</div><div className="case-desc">Fitness instructors can sync workout music to every participant simultaneously. No expensive sound system needed — just HushPod and everyone's earphones.</div></div>
+                <div className="case-card c5 reveal" style={{ transitionDelay: '.32s' }}><div className="case-emoji">🎬</div><div className="case-title">Remote Watch Parties</div><div className="case-desc">Sync background music or ambient audio for remote events and virtual gatherings. Everyone feels like they're in the same room even when apart.</div></div>
+                <div className="case-card c6 reveal" style={{ transitionDelay: '.4s' }}><div className="case-emoji">🏛️</div><div className="case-title">Audio Tours</div><div className="case-desc">Museums, galleries, and walking tours can sync audio guides to every visitor simultaneously. The guide controls the pace. Everyone hears the same thing.</div></div>
+              </div>
+            </section>
+
+            {/* ══ TECH ══ */}
+            <section id="tech" style={{ background: 'linear-gradient(180deg,var(--bg),var(--s1) 40%,var(--bg))' }}>
+              <div className="tech-inner">
+                <div className="reveal">
+                  <div className="section-label">🔬 Under the Hood</div>
+                  <h2 className="section-title">Engineered for precision</h2>
+                  <p className="section-sub">Every millisecond matters. Our sync engine is built from first principles to eliminate every source of drift.</p>
+                  <div className="tech-list">
+                    <div className="tech-item">
+                      <div className="tech-item-icon">⏱️</div>
+                      <div className="tech-item-text">
+                        <strong>Server-stamped timestamps</strong>
+                        <span>Every event is stamped with the server's own Date.now() — all guests reference the same clock, eliminating per-device clock offset errors.</span>
+                      </div>
+                    </div>
+                    <div className="tech-item">
+                      <div className="tech-item-icon">📐</div>
+                      <div className="tech-item-text">
+                        <strong>Seeked-event recalculation</strong>
+                        <span>After seeking, we wait for the browser's seeked confirmation then recalculate the target — absorbing 100–200ms mobile seek latency.</span>
+                      </div>
+                    </div>
+                    <div className="tech-item">
+                      <div className="tech-item-icon">🧭</div>
+                      <div className="tech-item-text">
+                        <strong>60fps dead reckoning</strong>
+                        <span>Between heartbeats, the sync loop calculates the host's exact position mathematically — drift never accumulates between updates.</span>
+                      </div>
+                    </div>
+                    <div className="tech-item">
+                      <div className="tech-item-icon">🔇</div>
+                      <div className="tech-item-text">
+                        <strong>Glitch-free correction</strong>
+                        <span>Small drifts are never corrected mid-play. Only catastrophic drift triggers a seek. Smooth audio always wins over perfect numbers.</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="tech-stats reveal" style={{ transitionDelay: '.15s' }}>
+                  <div className="stat-box">
+                    <div className="stat-val">&lt;100<span className="stat-unit">ms</span></div>
+                    <div className="stat-label">Sync precision</div>
+                  </div>
+                  <div className="stat-box">
+                    <div className="stat-val">500<span className="stat-unit">ms</span></div>
+                    <div className="stat-label">Heartbeat interval</div>
+                  </div>
+                  <div className="stat-box">
+                    <div className="stat-val">150<span className="stat-unit">MB</span></div>
+                    <div className="stat-label">Max file size</div>
+                  </div>
+                  <div className="stat-box">
+                    <div className="stat-val">10<span className="stat-unit"> songs</span></div>
+                    <div className="stat-label">Batch upload</div>
+                  </div>
+                  <div className="stat-box">
+                    <div className="stat-val">8<span className="stat-unit">x</span></div>
+                    <div className="stat-label">Clock sync samples</div>
+                  </div>
+                  <div className="stat-box">
+                    <div className="stat-val">0<span className="stat-unit">MB</span></div>
+                    <div className="stat-label">Data retained</div>
+                  </div>
+                </div>
               </div>
             </section>
 
@@ -708,9 +798,13 @@ function App() {
               </div>
               <div className="faq-grid">
                 {[
-                  { q: "Do guests need to download an app?", a: "No. HushPod works entirely in the browser. Guests simply open the link, enter the room code, and they're synced." },
-                  { q: "Does everyone need to be on the same WiFi?", a: "No. HushPod works over the internet — different WiFi networks, mobile data, different cities, different countries." },
-                  { q: "What happens if the host leaves?", a: "If the host disconnects, the longest-connected listener automatically becomes the new host. The room stays alive, playback continues." }
+                  { q: "Do guests need to download an app?", a: "No. HushPod works entirely in the browser. Guests simply open the link, enter the room code, and they're synced. No installation, no account, no friction." },
+                  { q: "Does everyone need to be on the same WiFi?", a: "No. HushPod works over the internet — different WiFi networks, mobile data, different cities, different countries. The sync engine handles network variance automatically." },
+                  { q: "What audio formats are supported?", a: "MP3, WAV, FLAC, AAC and most common audio formats. Files up to 150MB each. You can upload up to 10 songs at a time for a full session setlist." },
+                  { q: "Is my music stored on HushPod servers?", a: "Never permanently. Audio is held in server RAM only during your active session. The moment your room ends, everything is deleted. HushPod stores zero bytes of your music." },
+                  { q: "Can I use copyrighted music?", a: "You are responsible for any content you upload. HushPod provides synchronization technology only — not music. By accepting our Terms of Service, you confirm you own or have rights to any audio you share. See our Terms for full details." },
+                  { q: "What happens if the host leaves?", a: "If the host disconnects, the longest-connected listener automatically becomes the new host. The room stays alive, playback continues, and the party doesn't stop. Hosts also get a 30-second grace period to reconnect." },
+                  { q: "How many people can join a room?", a: "Free rooms support up to 15 simultaneous listeners. Premium plans with unlimited listeners are coming soon for larger events, silent discos, and enterprise use cases." }
                 ].map((faq, i) => (
                   <div key={i} className={`faq-item reveal ${openFaq === i ? 'open' : ''}`} style={{ transitionDelay: `${i * 0.05}s` }}>
                     <div className="faq-q" onClick={() => setOpenFaq(openFaq === i ? null : i)}>{faq.q} <span className="faq-arrow">▾</span></div>
@@ -726,7 +820,7 @@ function App() {
               <div className="reveal" style={{ position: 'relative' }}>
                 <div className="section-label" style={{ justifyContent: 'center' }}>🎧 Start Free</div>
                 <div className="cta-title"><span>LISTEN</span><br/>TOGETHER<br/><span>NOW</span></div>
-                <p className="cta-sub">Create your first room in under 10 seconds. No sign-up. No credit card.</p>
+                <p className="cta-sub">Create your first room in under 10 seconds. No sign-up. No credit card. Just music, perfectly in sync.</p>
                 <button className="btn-hero-primary" style={{ fontSize: '18px', padding: '18px 44px' }} onClick={() => { setView('app-entry'); window.scrollTo(0,0); }}>🎉 Create a Free Room</button>
               </div>
             </section>
@@ -738,12 +832,25 @@ function App() {
                   <div className="footer-brand">
                     <a href="#marketing" className="footer-logo" onClick={e => { e.preventDefault(); window.scrollTo(0,0); }}>HUSHPOD</a>
                     <p className="footer-tagline">Synchronized private group audio. Listen together in perfect sync — no app, no account, no lag.</p>
+                    <p style={{ marginTop: '12px', fontSize: '12px', color: 'var(--sub)' }}>Engineered by <span style={{ color: '#bb86fc', fontWeight: '700' }}>Zentry Hub Pvt Ltd</span></p>
                   </div>
                   <div className="footer-col">
                     <h4>Product</h4>
                     <a href="#app" onClick={(e) => { e.preventDefault(); setView('app-entry'); window.scrollTo(0,0); }}>Launch App</a>
                     <a href="#features" onClick={e => { e.preventDefault(); document.getElementById('features')?.scrollIntoView({behavior: 'smooth'}); }}>Features</a>
+                    <a href="#how" onClick={e => { e.preventDefault(); document.getElementById('how')?.scrollIntoView({behavior: 'smooth'}); }}>How It Works</a>
+                    <a href="#tech" onClick={e => { e.preventDefault(); document.getElementById('tech')?.scrollIntoView({behavior: 'smooth'}); }}>Technology</a>
                   </div>
+                  <div className="footer-col">
+                    <h4>Company</h4>
+                    <a href="#faq" onClick={e => { e.preventDefault(); document.getElementById('faq')?.scrollIntoView({behavior: 'smooth'}); }}>FAQ</a>
+                    <a href="#terms">Terms of Service</a>
+                    <a href="mailto:contact@hushpod.app">Contact Us</a>
+                  </div>
+                </div>
+                <div className="footer-bottom">
+                  <div className="footer-copy">© 2026 HushPod · Built with ♥ in India</div>
+                  <div className="footer-copy" style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: '11px', color: 'var(--sub)' }}>v2.0.0 · Node.js + Socket.io · Zero data retention</div>
                 </div>
               </div>
             </footer>
@@ -751,7 +858,7 @@ function App() {
         </div>
       )}
 
-      {view === 'app-entry' && (
+      {view === 'app-entry' && !isSyncing && (
         <div className="scr on" id="app-entry" style={{alignItems:'center', justifyContent:'center', padding:'40px 20px', textAlign:'center', flex:1}}>
           <div style={{width:'100%', maxWidth:'340px', margin:'0 auto 20px auto', textAlign:'left'}}>
             <button className="btn-ghost" style={{padding:'8px 16px', borderRadius:'8px', fontSize:'12px', cursor:'pointer', width:'auto'}} onClick={() => {setView('marketing'); window.scrollTo(0,0);}}>← Back to Home</button>
@@ -761,20 +868,21 @@ function App() {
           <div className="field" style={{maxWidth:'340px', margin:'0 auto'}}><label>Your name</label><input type="text" value={uname} onChange={e => setUname(e.target.value)} placeholder="Enter your name" maxLength="20" /></div>
           
           <div className="btns" style={{maxWidth:'340px', margin:'0 auto'}}>
-            <button className="btn-pink" onClick={attemptCreateRoom}>Create Party Room</button>
+            {/* FIX: Corrected button classes */}
+            <button className="btn btn-pink" onClick={attemptCreateRoom}>Create Party Room</button>
             <div style={{display:'flex', alignItems:'center', gap:'9px', color:'var(--sub)', fontSize:'12px', margin:'10px 0'}}>
               <span style={{flex:1, height:'1px', background:'var(--border)'}}></span>or join one<span style={{flex:1, height:'1px', background:'var(--border)'}}></span>
             </div>
             <div style={{padding:'20px', borderRadius:'18px', border:'1px solid var(--border)', background:'var(--s1)'}}>
               <h3 style={{fontSize:'11px', fontWeight:'600', letterSpacing:'2px', textTransform:'uppercase', color:'var(--sub)', marginBottom:'12px'}}>Room Code</h3>
               <input type="text" value={codeInput} onChange={e => setCodeInput(e.target.value.toUpperCase())} placeholder="ABC12" maxLength="5" style={{textAlign:'center', letterSpacing:'6px', fontFamily:'JetBrains Mono', fontWeight:'bold', marginBottom:'12px'}} />
-              <button className="btn-cyan" style={{marginBottom:0}} onClick={attemptJoinRoom}>Join Room</button>
+              <button className="btn btn-cyan" style={{marginBottom:0}} onClick={attemptJoinRoom}>Join Room</button>
             </div>
           </div>
         </div>
       )}
 
-      {view === 'room' && (
+      {view === 'room' && !isSyncing && (
         <div className="scr on" id="room" style={{padding:0, minHeight:'calc(100vh - 300px)', display:'flex', flexDirection:'column'}}>
           <div className="rhead" style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'14px 18px', background:'rgba(6,6,15,.9)', backdropFilter:'blur(20px)', position:'sticky', top:0, zIndex:10, borderBottom:'1px solid var(--border)'}}>
             <div className="rhead-left" style={{display:'flex', flexDirection:'column', gap:'3px'}}>
@@ -813,7 +921,7 @@ function App() {
                     <div style={{fontSize: '12px', color: 'var(--sub)', marginTop: '4px'}}>Music physically travels around the room.</div>
                   </div>
                   {amHost && (
-                     <button className={orbitActive ? 'btn-pink' : 'btn-ghost'} style={{width: 'auto', margin: 0, padding: '8px 16px', borderRadius: '8px', fontSize: '12px'}} onClick={() => socketRef.current.emit('set-orbit', {active: !orbitActive})}>
+                     <button className={`btn ${orbitActive ? 'btn-pink' : 'btn-ghost'}`} style={{width: 'auto', margin: 0, padding: '8px 16px', borderRadius: '8px', fontSize: '12px'}} onClick={() => socketRef.current.emit('set-orbit', {active: !orbitActive})}>
                        {orbitActive ? 'Active' : 'Turn On'}
                      </button>
                   )}
@@ -832,7 +940,7 @@ function App() {
             {roomTab === 'party' && (
               <>
                 <div className="card">
-                  <div className="card-label">Listeners <span style={{background:'var(--s3)', borderRadius:'20px', padding:'2px 8px', fontSize:'11px', color:'var(--cyan)'}}>{members.length}</span></div>
+                  <div className="card-label">Listeners <span style={{background:'var(--s3)', borderRadius:'20px', padding:'2px 8px', fontSize:'11px', color:'var(--cyan)'}}>{members.length}/15</span></div>
                   <div style={{display:'flex', flexDirection:'column', gap:'7px'}}>
                     {members.map((m, i) => (
                       <div key={i} style={{display:'flex', alignItems:'center', justifyContent:'space-between', background:'var(--s2)', border: m.isHost ? '1px solid rgba(247,37,133,.35)' : '1px solid var(--border)', borderRadius:'12px', padding:'10px 14px', fontSize:'13px', fontWeight:'500'}}>
@@ -854,7 +962,7 @@ function App() {
                   </div>
                   <div className="chat-input-wrap" style={{display:'flex', gap:'8px'}}>
                     <input type="text" placeholder="Type a message..." value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleChat()} style={{flex:1, padding:'10px 12px', background:'var(--s3)', border:'1px solid var(--border)', borderRadius:'8px', color:'#fff', fontSize:'13px', outline:'none'}} />
-                    <button className="btn-cyan" style={{margin:0, width:'auto', padding:'9px 16px', borderRadius:'8px', fontSize:'13px'}} onClick={handleChat}>Send</button>
+                    <button className="btn btn-cyan" style={{margin:0, width:'auto', padding:'9px 16px', borderRadius:'8px', fontSize:'13px'}} onClick={handleChat}>Send</button>
                   </div>
                 </div>
               </>
@@ -950,13 +1058,13 @@ function App() {
                     </div>
 
                     <div className="card">
-                      <div className="card-label">Host Permissions</div>
+                      <div className="card-label">Room Permissions</div>
                       <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', background:'var(--s2)', padding:'15px', borderRadius:'12px', border:'1px solid var(--border)'}}>
                         <div>
                           <div style={{fontWeight:'600', fontSize:'14px'}}>Allow Guests to Upload</div>
                           <div style={{fontSize:'11px', color:'var(--sub)', marginTop:'2px'}}>Let listeners add songs to the queue</div>
                         </div>
-                        <button className={guestUploads ? 'btn-cyan' : 'btn-ghost'} style={{width:'auto', margin:0, padding:'8px 16px', borderRadius:'8px', fontSize:'13px'}} onClick={() => socketRef.current.emit('toggle-guest-uploads', {allowed: !guestUploads})}>
+                        <button className={`btn ${guestUploads ? 'btn-cyan' : 'btn-ghost'}`} style={{width:'auto', margin:0, padding:'8px 16px', borderRadius:'8px', fontSize:'13px'}} onClick={() => socketRef.current.emit('toggle-guest-uploads', {allowed: !guestUploads})}>
                           {guestUploads ? 'Enabled' : 'Disabled'}
                         </button>
                       </div>
@@ -981,17 +1089,14 @@ function App() {
           <div style={{background:'var(--s1)', border:'1px solid var(--border)', borderRadius:'22px', padding:'30px 24px', maxWidth:'400px', width:'100%', textAlign:'left'}}>
             <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:'28px', letterSpacing:'2px', background:'linear-gradient(135deg,var(--pink),var(--cyan))', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', marginBottom:'2px'}}>HUSHPOD</div>
             <div style={{fontSize:'11px', fontWeight:'600', color:'var(--sub)', letterSpacing:'2px', textTransform:'uppercase', marginBottom:'20px'}}>Terms of Service</div>
-
             <div style={{marginBottom:'14px'}}>
               <div style={{fontSize:'11px', fontWeight:'700', color:'var(--cyan)', textTransform:'uppercase', letterSpacing:'1px', marginBottom:'5px'}}>🎵 Your Content, Your Responsibility</div>
               <div style={{fontSize:'12px', color:'var(--sub)', lineHeight:'1.7'}}>By uploading audio, you confirm you own the content, hold a valid license, or have explicit permission from the copyright holder.</div>
             </div>
-
             <label style={{display:'flex', alignItems:'flex-start', gap:'10px', margin:'18px 0', padding:'14px', background:'var(--s2)', borderRadius:'12px', border:'1px solid var(--border)', cursor:'pointer'}}>
               <input type="checkbox" checked={tosChecked} onChange={e => setTosChecked(e.target.checked)} style={{marginTop:'2px', accentColor:'var(--cyan)', width:'16px', height:'16px', cursor:'pointer'}} />
               <span style={{fontSize:'12px', color:'var(--text)', lineHeight:'1.6', cursor:'pointer'}}>I confirm I will only upload content I own or have rights to.</span>
             </label>
-
             <div style={{display:'flex', gap:'10px'}}>
               <button className="btn-ghost" style={{margin:0, padding:'12px', flex:1}} onClick={() => setModals({...modals, tos: false})}>Cancel</button>
               <button className="btn-cyan" style={{margin:0, padding:'12px', flex:1, opacity: tosChecked ? 1 : 0.4}} disabled={!tosChecked} onClick={confirmTosAndExecute}>Accept</button>
@@ -1005,14 +1110,7 @@ function App() {
           <div style={{background:'var(--s1)', border:'1px solid rgba(255,214,10,.35)', borderRadius:'22px', padding:'30px 24px', maxWidth:'320px', width:'100%', textAlign:'center'}}>
             <h3 style={{color:'#fff', marginBottom:'15px', fontFamily:"'Bebas Neue',sans-serif", letterSpacing:'2px', fontSize:'28px'}}>Scan to Join</h3>
             <div style={{background:'#ffffff', padding:'15px', borderRadius:'10px', display:'inline-block', marginBottom:'15px'}}>
-              <QRCodeSVG 
-                value={`${window.location.origin}/?room=${roomCode}`} 
-                size={180} 
-                bgColor="#ffffff"
-                fgColor="#000000"
-                level="L"
-                includeMargin={false}
-              />
+              <QRCodeSVG value={`${window.location.origin}/?room=${roomCode}`} size={180} bgColor="#ffffff" fgColor="#000000" level="L" includeMargin={false} />
             </div>
             <p style={{color:'var(--sub)', fontSize:'13px', marginBottom:'20px'}}>Or use code: <strong style={{color:'var(--pink)', fontSize:'18px', letterSpacing:'2px'}}>{roomCode}</strong></p>
             <button className="btn-ghost" style={{width:'100%', padding:'15px', borderRadius:'12px', fontWeight:'600', cursor:'pointer'}} onClick={() => setModals({...modals, qr: false})}>Close</button>
