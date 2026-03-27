@@ -7,6 +7,11 @@ const multer = require('multer');
 const fs = require('fs');
 
 const app = express();
+app.use((req, res, next) => {
+  res.setHeader("X-Robots-Tag", "all");
+  next();
+});
+app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, { 
   cors: { origin: '*' }, 
