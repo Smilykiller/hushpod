@@ -310,6 +310,7 @@ io.on('connection', (socket) => {
 }); // <--- ADDED THIS LINE! This correctly closes the io.on('connection') block.
 
 // --- SERVE THE REACT FRONTEND ---
+app.get('/clocksync', (req, res) => res.json({ t: Date.now() }));
 app.use(express.static(path.join(__dirname, '../frontend/build')));
 
 // FIX: Use app.use instead of app.get('*') to avoid the path-to-regexp crash

@@ -16,7 +16,7 @@ function App() {
   const [uname, setUname] = useState('');
   const [roomCode, setRoomCode] = useState('');
   
-  // FIX: Loader starts true so it covers the initial page load
+  // FIX 1: Loader starts TRUE to cover the initial page load & refresh
   const [isSyncing, setIsSyncing] = useState(true);
   
   const [codeInput, setCodeInput] = useState('');
@@ -43,7 +43,7 @@ function App() {
   const audioBufferRef = useRef(null);
   const sourceNodeRef = useRef(null);
   const gainNodeRef = useRef(null);
-  const pannerNodeRef = useRef(null); 
+  const pannerNodeRef = useRef(null);
   const analyserRef = useRef(null);
   
   const stateRef = useRef({ clockOff: 0, songOffset: 0, nodeStartTime: 0, localPlayState: false, amHost: false, queue: [], loop: false, shuffle: false, currentSongId: null, uname: '', members: [], globalVolume: 1.0, orbitActive: false });
@@ -55,9 +55,6 @@ function App() {
   const orbitRafRef = useRef(null);
   const audioOrbitRaf = useRef(null);
   const toastTmr = useRef(null);
-  
-  // FIX: Dynamic radar Delta Time reference
-  const radarRef = useRef({ angle: 0, lastTime: Date.now() });
 
   const toast = (msg, type = 'inf') => {
     setToastData({ msg, type, visible: true });
@@ -65,7 +62,9 @@ function App() {
     toastTmr.current = setTimeout(() => setToastData(t => ({ ...t, visible: false })), 3000);
   };
 
-  const amHost = members.find(m => m.id === socketRef.current?.id)?.isHost || false;
+  // Safely find our user in the room list and check if they hold the true Host badge
+  const myMemberData = members.find(m => m.id === socketRef.current?.id);
+  const amHost = myMemberData ? myMemberData.isHost : false;
 
   useEffect(() => {
     stateRef.current.queue = queue;
@@ -79,7 +78,7 @@ function App() {
     stateRef.current.orbitActive = orbitActive;
   }, [queue, isLooping, isShuffle, currentSong, uname, amHost, members, globalVolume, orbitActive]);
 
-  // FIX: Web Audio Autoplay Unlocker
+  // FIX 2: Global Mobile Audio Unlocker - Eliminates deep sync lags on mobile Safari/Chrome
   useEffect(() => {
     const unlockAudio = () => {
       if (actxRef.current && actxRef.current.state === 'suspended') {
@@ -99,9 +98,19 @@ function App() {
       const observer = new IntersectionObserver(entries => {
         entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
       }, { threshold: 0.12 });
-      setTimeout(() => { document.querySelectorAll('.reveal').forEach(el => observer.observe(el)); }, 100);
-      const interval = setInterval(() => { setActiveRooms(prev => Math.max(1, prev + (Math.random() > 0.5 ? 1 : -1))); }, 7000);
-      return () => { observer.disconnect(); clearInterval(interval); };
+      
+      setTimeout(() => {
+        document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+      }, 100);
+
+      const interval = setInterval(() => {
+        setActiveRooms(prev => Math.max(1, prev + (Math.random() > 0.5 ? 1 : -1)));
+      }, 7000);
+
+      return () => {
+        observer.disconnect();
+        clearInterval(interval);
+      };
     }
   }, [view]);
 
@@ -119,11 +128,15 @@ function App() {
             return toast(res.error, 'err'); 
           }
 
-          // FIX: 15 Person Limit check on reconnect
+          // FIX 3: 15 Person Limit check on reconnect
           if (res.members && res.members.length > 15) {
              sessionStorage.removeItem('hushpod_session');
-             socketRef.current.disconnect(); socketRef.current = null;
+             if (socketRef.current) {
+                 socketRef.current.disconnect();
+                 socketRef.current = null;
+             }
              setIsSyncing(false);
+             setView('app-entry');
              return toast('Room is full (Max 15)!', 'err');
           }
 
@@ -137,12 +150,12 @@ function App() {
             setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
             guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true);
           }
-          setIsSyncing(false);
+          setIsSyncing(false); // Hide global loader
           setRoomTab('dj'); setView('room');
         });
       });
     } else {
-      setIsSyncing(false);
+      setIsSyncing(false); // No session, drop the loader instantly
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -199,17 +212,25 @@ function App() {
       }
     };
     window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+    };
   }, [view]);
 
   const initSystem = async () => {
     if (!actxRef.current) {
       actxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      
+      // RESTORED: Calculate Physical Speaker/Bluetooth Latency
+      stateRef.current.outLat = Math.max(0.020, Math.min(0.150, actxRef.current.outputLatency || actxRef.current.baseLatency || 0.060));
+      
       gainNodeRef.current = actxRef.current.createGain();
       pannerNodeRef.current = actxRef.current.createStereoPanner ? actxRef.current.createStereoPanner() : actxRef.current.createGain();
       analyserRef.current = actxRef.current.createAnalyser();
       analyserRef.current.fftSize = 128;
       
+      // ORBIT AUDIO ROUTING
       pannerNodeRef.current.connect(analyserRef.current);
       analyserRef.current.connect(gainNodeRef.current);
       gainNodeRef.current.connect(actxRef.current.destination);
@@ -225,7 +246,7 @@ function App() {
       socketRef.current = io(SERVER, { transports: ['websocket', 'polling'] });
       setupSocketListeners(socketRef.current);
       
-      // FIX: Silent Reconnect if connection drops
+      // Silent Reconnect logic
       socketRef.current.on('connect', () => {
          if (stateRef.current.uname && roomCode) {
              socketRef.current.emit('join-room', { code: roomCode, name: stateRef.current.uname, claimHost: false }, () => {});
@@ -236,20 +257,26 @@ function App() {
 
   const syncClock = async () => {
     const samples = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 8; i++) {
       try {
-        const t1 = Date.now();
-        const r = await fetch(SERVER + '/clocksync', { cache: 'no-store' });
-        const { t } = await r.json();
-        const t4 = Date.now();
-        samples.push({ offset: t + ((t4 - t1) / 2) - Date.now(), rtt: t4 - t1 });
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 1000);
+        const t1 = performance.now();
+        const r = await fetch(SERVER + '/clocksync', { cache: 'no-store', signal: ctrl.signal });
+        const t4 = performance.now(); 
+        clearTimeout(tid);
+        const { t } = await r.json(); 
+        const rtt = t4 - t1;
+        // Restored: Ignore laggy packets, use high-precision performance clock
+        if (rtt < 150) samples.push({ offset: t + (rtt / 2) - Date.now(), rtt });
       } catch {}
+      await new Promise(res => setTimeout(res, 40)); 
     }
     if (samples.length > 0) {
-      // FIX: Average the 3 fastest pings for stability
       samples.sort((a, b) => a.rtt - b.rtt);
-      const best = samples.slice(0, 3);
-      stateRef.current.clockOff = best.reduce((sum, s) => sum + s.offset, 0) / best.length;
+      // Restored: Median of top 3 is much safer than Average
+      const offs = samples.slice(0, 3).map(s => s.offset).sort((a, b) => a - b);
+      stateRef.current.clockOff = offs[Math.floor(offs.length / 2)];
     }
   };
 
@@ -270,7 +297,8 @@ function App() {
     sourceNodeRef.current = actxRef.current.createBufferSource();
     sourceNodeRef.current.buffer = audioBufferRef.current;
     
-    sourceNodeRef.current.connect(pannerNodeRef.current); 
+    // Connect to Orbit Spatial Engine
+    sourceNodeRef.current.connect(pannerNodeRef.current);
 
     sourceNodeRef.current.onended = () => {
       const s = stateRef.current;
@@ -278,9 +306,12 @@ function App() {
         if (s.amHost) {
           const q = s.queue;
           if (q.length > 0) {
-            if (s.loop) { socketRef.current.emit('play-song', { songId: s.currentSongId, autoPlay: true }); } 
-            else if (s.shuffle) { socketRef.current.emit('play-song', { songId: q[Math.floor(Math.random() * q.length)].id, autoPlay: true }); } 
-            else {
+            if (s.loop) {
+              socketRef.current.emit('play-song', { songId: s.currentSongId, autoPlay: true });
+            } else if (s.shuffle) {
+              const randomSong = q[Math.floor(Math.random() * q.length)];
+              socketRef.current.emit('play-song', { songId: randomSong.id, autoPlay: true });
+            } else {
               const idx = q.findIndex(x => x.id === s.currentSongId);
               if (idx !== -1 && idx < q.length - 1) socketRef.current.emit('play-song', { songId: q[idx + 1].id, autoPlay: true });
               else { socketRef.current.emit('song-ended', {}); setCurrentSong(null); }
@@ -298,6 +329,7 @@ function App() {
   const guestLoadAndSync = async (url, playState, isNewJoiner = false) => {
     stopAudio(); audioBufferRef.current = null;
     if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Downloading track...' });
+    
     try {
       const res = await fetch(url);
       const arrayBuffer = await res.arrayBuffer();
@@ -308,14 +340,21 @@ function App() {
 
   const applyPlayState = (playing, currentTime, ts, isNewJoiner = false) => {
     if (!audioBufferRef.current) return;
+    
+    // RESTORED: Factor in the hardware output latency so music aligns in the physical air!
+    const outLat = stateRef.current.outLat || 0.060;
     const elapsed = (Date.now() + stateRef.current.clockOff - ts) / 1000;
+    
     if (!playing) { 
       stopAudio(); stateRef.current.songOffset = currentTime; 
-      if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Paused' }); return; 
+      if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Paused' });
+      return; 
     }
     
-    let expectedOffset = currentTime + elapsed;
+    // Notice the + outLat added here!
+    let expectedOffset = currentTime + elapsed + outLat;
     let startTime = actxRef.current.currentTime + 0.05;
+
     if (expectedOffset < 0) { startTime = actxRef.current.currentTime + Math.abs(expectedOffset); expectedOffset = 0; }
     
     if (isNewJoiner && !stateRef.current.amHost && expectedOffset > 0) {
@@ -325,6 +364,7 @@ function App() {
     } else {
         if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Locked Sync' });
     }
+
     if (expectedOffset >= audioBufferRef.current.duration) { stopAudio(); return; }
     playAudioAt(expectedOffset, startTime);
   };
@@ -338,6 +378,7 @@ function App() {
   const drawVisualizer = () => {
     if (!stateRef.current.localPlayState || !analyserRef.current) return;
     vizRafRef.current = requestAnimationFrame(drawVisualizer);
+    
     const cvs = document.getElementById('viz-canvas');
     if(!cvs) return; const ctx = cvs.getContext('2d'); if(!ctx) return;
     
@@ -345,10 +386,13 @@ function App() {
     const data = new Uint8Array(analyserRef.current.frequencyBinCount);
     analyserRef.current.getByteFrequencyData(data); ctx.clearRect(0, 0, W, H);
     
+    const style = getComputedStyle(document.body);
+    const pColor = style.getPropertyValue('--cyan').trim() || '#4cc9f0';
+    
     const bw = (W / data.length) * 2.5; let x = 0;
     for(let i=0; i<data.length; i++) {
       const bh = (data[i] / 255) * H;
-      ctx.fillStyle = '#4cc9f0'; ctx.fillRect(x, H - bh, bw, bh); x += bw + 1;
+      ctx.fillStyle = pColor; ctx.fillRect(x, H - bh, bw, bh); x += bw + 1;
     }
     
     let currentPos = Math.max(0, Math.min(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime), audioBufferRef.current?.duration || 1));
@@ -356,7 +400,7 @@ function App() {
     if (tCurRef.current) tCurRef.current.textContent = fmt(currentPos);
   };
 
-  // --- ORBIT MODE AUDIO ENGINE & VISUALS ---
+  // --- ORBIT MODE: DYNAMIC MATH & AUDIO ENGINE ---
   useEffect(() => {
     const runOrbitUI = () => {
       if (roomTab !== 'orbit') return;
@@ -366,7 +410,11 @@ function App() {
       const W = cvs.width = cvs.offsetWidth; const H = cvs.height = cvs.offsetHeight;
       const cx = W/2, cy = H/2; const radius = Math.min(W, H) * 0.35;
       
-      const radarAngle = radarRef.current.angle;
+      // FIX 5: Dynamic Global Time Radar
+      const total = stateRef.current.members.length || 1;
+      const speedMs = Math.max(3000, Math.min(10000, 2000 * total)); 
+      const globalTime = Date.now() + stateRef.current.clockOff;
+      const radarAngle = ((globalTime % speedMs) / speedMs) * Math.PI * 2;
 
       ctx.fillStyle = 'rgba(10, 10, 20, 0.4)'; ctx.fillRect(0, 0, W, H);
       ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI*2);
@@ -381,7 +429,6 @@ function App() {
         ctx.fillStyle = grad; ctx.fill(); ctx.restore();
       }
 
-      const total = stateRef.current.members.length || 1;
       stateRef.current.members.forEach((m, i) => {
         const a = (i / total) * Math.PI * 2;
         const x = cx + Math.cos(a) * radius; const y = cy + Math.sin(a) * radius;
@@ -407,35 +454,31 @@ function App() {
     const updateAudioOrbit = () => {
       audioOrbitRaf.current = requestAnimationFrame(updateAudioOrbit);
       
-      const now = Date.now();
-      const dt = now - radarRef.current.lastTime;
-      radarRef.current.lastTime = now;
-
-      // FIX: Dynamic Orbit Speed!
-      const total = stateRef.current.members.length || 1;
-      const speedMs = Math.max(3000, 2000 * total); 
-      const angularVelocity = (Math.PI * 2) / speedMs;
-      
-      radarRef.current.angle = (radarRef.current.angle + (angularVelocity * dt)) % (Math.PI * 2);
-
-      if (!stateRef.current.orbitActive || !pannerNodeRef.current || !pannerNodeRef.current.pan) {
-        if (pannerNodeRef.current && pannerNodeRef.current.pan) pannerNodeRef.current.pan.setTargetAtTime(0, actxRef.current.currentTime, 0.1);
-        if (gainNodeRef.current) gainNodeRef.current.gain.setTargetAtTime(stateRef.current.globalVolume, actxRef.current.currentTime, 0.1);
+      if (!stateRef.current.orbitActive || !pannerNodeRef.current || !gainNodeRef.current) {
+        if (pannerNodeRef.current && pannerNodeRef.current.pan) pannerNodeRef.current.pan.value = 0;
+        if (gainNodeRef.current) gainNodeRef.current.gain.value = stateRef.current.globalVolume;
         return;
       }
+      
+      const total = stateRef.current.members.length || 1;
+      const speedMs = Math.max(3000, Math.min(10000, 2000 * total)); 
+      const globalTime = Date.now() + stateRef.current.clockOff;
+      const radarAngle = ((globalTime % speedMs) / speedMs) * Math.PI * 2;
       
       const myIdx = stateRef.current.members.findIndex(m => m.id === socketRef.current?.id);
       if (myIdx === -1) return;
       const myAngle = (myIdx / total) * Math.PI * 2;
       
-      let diff = Math.abs(radarRef.current.angle - myAngle);
+      let diff = Math.abs(radarAngle - myAngle);
       if (diff > Math.PI) diff = Math.PI * 2 - diff;
       
+      // FIX 6: Direct Volume Assignment prevents Safari bugs
       const vol = 0.2 + 0.8 * Math.max(0, Math.cos(diff));
-      gainNodeRef.current.gain.setTargetAtTime(vol * stateRef.current.globalVolume, actxRef.current.currentTime, 0.1);
+      gainNodeRef.current.gain.value = vol * stateRef.current.globalVolume;
       
-      const panRaw = Math.sin(radarRef.current.angle - myAngle);
-      pannerNodeRef.current.pan.setTargetAtTime(panRaw, actxRef.current.currentTime, 0.1);
+      if (pannerNodeRef.current.pan) {
+          pannerNodeRef.current.pan.value = Math.sin(radarAngle - myAngle);
+      }
     };
     updateAudioOrbit();
     return () => cancelAnimationFrame(audioOrbitRaf.current);
@@ -460,43 +503,63 @@ function App() {
 
     sock.on('heartbeat', ({ currentTime, ts }) => {
       if (stateRef.current.amHost || !stateRef.current.localPlayState || !audioBufferRef.current) return;
+      
+      // Calculate real-world target time including hardware latency
+      const outLat = stateRef.current.outLat || 0.060;
       const elapsed = (sNow() - ts) / 1000;
-      const expectedTime = currentTime + elapsed;
+      const expectedTime = currentTime + elapsed + outLat;
       const actualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
-      if (Math.abs(expectedTime - actualTime) > 0.4) applyPlayState(true, currentTime, ts, false);
+      
+      const drift = expectedTime - actualTime;
+      const absDrift = Math.abs(drift);
+
+      // Deep Sync: Hard seek if terrible, invisible micro-speed adjustment if slightly off
+      if (absDrift > 0.500) {
+          applyPlayState(true, currentTime, ts, false);
+      } else if (absDrift > 0.020 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          const correction = Math.min(0.04, absDrift * 0.8);
+          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.0 + correction : 1.0 - correction;
+      } else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          sourceNodeRef.current.playbackRate.value = 1.0;
+      }
     });
 
     sock.on('queue-updated', ({ queue }) => setQueue(queue));
     
     sock.on('chat-msg', ({ name, text }) => { 
       setChat(prev => [...prev, { name, text }]); 
-      if (name !== stateRef.current.uname) toast(`💬 ${name}: ${text}`, 'inf');
+      if (name !== stateRef.current.uname) { toast(`💬 ${name}: ${text}`, 'inf'); }
       setTimeout(() => { if (chatBoxRef.current) chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight; }, 10); 
     });
     
     sock.on('settings-updated', (s) => {
-      setGuestUploads(s.guestUploads); setGlobalVolume(s.globalVolume); setOrbitActive(s.orbitActive);
-      if (gainNodeRef.current && actxRef.current && !s.orbitActive) gainNodeRef.current.gain.setValueAtTime(s.globalVolume, actxRef.current.currentTime);
+      setGuestUploads(s.guestUploads); 
+      setGlobalVolume(s.globalVolume);
+      setOrbitActive(s.orbitActive);
+      if (gainNodeRef.current && actxRef.current && !s.orbitActive) gainNodeRef.current.gain.value = s.globalVolume;
     });
 
-    sock.on('member-joined', ({ members }) => setMembers(members));
-    sock.on('member-left', ({ members }) => setMembers(members));
-    
+    sock.on('member-joined', ({ members }) => { setMembers(members); });
+    sock.on('member-left', ({ members }) => { setMembers(members); });
     sock.on('host-left', () => { 
       sessionStorage.removeItem('hushpod_session');
-      toast('Room closed', 'err'); 
+      toast('Host ended the room', 'err'); 
       setTimeout(() => window.location.reload(), 2000); 
     });
   };
 
   const attemptCreateRoom = () => {
     if (!uname.trim()) return toast('Enter your name first', 'err');
-    setPendingAction('create'); setTosChecked(false); setModals({ ...modals, tos: true });
+    setPendingAction('create');
+    setTosChecked(false);
+    setModals({ ...modals, tos: true });
   };
 
   const attemptJoinRoom = () => {
     if (!uname.trim() || codeInput.length < 3) return toast('Enter name and code', 'err');
-    setPendingAction('join'); setTosChecked(false); setModals({ ...modals, tos: true });
+    setPendingAction('join');
+    setTosChecked(false);
+    setModals({ ...modals, tos: true });
   };
 
   const confirmTosAndExecute = async () => {
@@ -504,12 +567,14 @@ function App() {
     setModals({ ...modals, tos: false });
     
     if (pendingAction === 'create') {
-      setIsSyncing(true); await initSystem();
+      setIsSyncing(true);
+      await initSystem();
       socketRef.current.emit('create-room', { name: uname }, (res) => {
         setRoomCode(res.code); 
         setMembers([{ id: socketRef.current.id, name: uname, isHost: true }]);
         sessionStorage.setItem('hushpod_session', JSON.stringify({ code: res.code, name: uname }));
-        setIsSyncing(false); setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
+        setIsSyncing(false);
+        setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
         document.title = `HushPod | ${uname}'s Party`;
         setInterval(() => {
           const s = stateRef.current;
@@ -518,11 +583,12 @@ function App() {
       });
     } 
     else if (pendingAction === 'join') {
-      setIsSyncing(true); await initSystem();
+      setIsSyncing(true);
+      await initSystem();
       socketRef.current.emit('join-room', { code: codeInput, name: uname, claimHost: false }, (res) => {
         if (res.error) { setIsSyncing(false); return toast(res.error, 'err'); }
         
-        // FIX: Capacity Limit Check!
+        // FIX: Capacity Limit Check on Manual Join
         if (res.members && res.members.length > 15) {
              setIsSyncing(false);
              socketRef.current.disconnect(); socketRef.current = null;
@@ -536,8 +602,13 @@ function App() {
         
         const hostUser = res.members.find(m => m.isHost);
         document.title = `HushPod | ${hostUser ? hostUser.name : 'Room'}'s Party`;
-        if(res.currentSong) { setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name }); guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true); }
-        setIsSyncing(false); setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
+
+        if(res.currentSong) {
+          setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
+          guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true);
+        }
+        setIsSyncing(false);
+        setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
       });
     }
   };
@@ -554,7 +625,8 @@ function App() {
     if (!amHost || !audioBufferRef.current) return;
     const r = e.currentTarget.getBoundingClientRect();
     const percent = (e.clientX - r.left) / r.width;
-    handleSeek(Math.max(0, Math.min(audioBufferRef.current.duration, percent * audioBufferRef.current.duration)));
+    const t = Math.max(0, Math.min(audioBufferRef.current.duration, percent * audioBufferRef.current.duration));
+    handleSeek(t);
   };
 
   const uploadSongs = (files) => {
@@ -562,7 +634,10 @@ function App() {
     if (!amHost && !guestUploads) return toast('Host has locked uploads', 'err');
     
     let filesToUpload = Array.from(files);
-    if (filesToUpload.length > 10) { toast('Max 10 files. Slicing list.', 'inf'); filesToUpload = filesToUpload.slice(0, 10); }
+    if (filesToUpload.length > 10) {
+      toast('Max 10 files allowed. Slicing list.', 'inf');
+      filesToUpload = filesToUpload.slice(0, 10);
+    }
 
     setUploadProgress(1); const fd = new FormData();
     for (let i = 0; i < filesToUpload.length; i++) fd.append('songs', filesToUpload[i]);
@@ -571,8 +646,10 @@ function App() {
     const xhr = new XMLHttpRequest(); xhr.open('POST', SERVER + '/upload/' + roomCode);
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100)); };
     xhr.onload = () => { 
-      setUploadProgress(0); if (xhr.status !== 200) toast('Upload failed', 'err'); 
-      const fileInput = document.getElementById('q-file'); if (fileInput) fileInput.value = "";
+      setUploadProgress(0); 
+      if (xhr.status !== 200) toast('Upload failed', 'err'); 
+      const fileInput = document.getElementById('q-file');
+      if (fileInput) fileInput.value = "";
     };
     xhr.send(fd);
   };
@@ -580,16 +657,22 @@ function App() {
   const handleGlobalVolume = (e) => {
     if(!amHost) return;
     const val = parseFloat(e.target.value);
-    setGlobalVolume(val); socketRef.current.emit('set-global-volume', { volume: val });
-    if (gainNodeRef.current && actxRef.current && !orbitActive) gainNodeRef.current.gain.setValueAtTime(val, actxRef.current.currentTime);
+    setGlobalVolume(val);
+    socketRef.current.emit('set-global-volume', { volume: val });
+    if (gainNodeRef.current && actxRef.current && !orbitActive) gainNodeRef.current.gain.value = val;
   };
 
   const handleChat = () => { if (!chatInput.trim()) return; socketRef.current.emit('chat-msg', { text: chatInput.trim() }); setChatInput(''); };
   
   const handleDrop = (e, index) => {
-    e.preventDefault(); if (draggedIdx === null || draggedIdx === index) return;
-    const newQ = [...queue]; const [moved] = newQ.splice(draggedIdx, 1); newQ.splice(index, 0, moved);
-    setQueue(newQ); socketRef.current.emit('reorder-queue', { newOrder: newQ.map(q => q.id) }); setDraggedIdx(null);
+    e.preventDefault();
+    if (draggedIdx === null || draggedIdx === index) return;
+    const newQ = [...queue];
+    const [moved] = newQ.splice(draggedIdx, 1);
+    newQ.splice(index, 0, moved);
+    setQueue(newQ);
+    socketRef.current.emit('reorder-queue', { newOrder: newQ.map(q => q.id) });
+    setDraggedIdx(null);
   };
 
   const currentHost = members.find(m => m.isHost);
@@ -600,6 +683,7 @@ function App() {
       <canvas id="bgc"></canvas>
       <div className={`toast ${toastData.visible ? 'on' : ''} ${toastData.type}`}>{toastData.msg}</div>
       
+      {/* ── THE GLOBAL NEON LOADER ── */}
       {isSyncing && (
         <div className="loader-overlay">
           <div className="eq-container">
@@ -609,8 +693,10 @@ function App() {
         </div>
       )}
 
+      {/* ── VIEWS WRAPPED IN !isSyncing ── */}
       {view === 'marketing' && !isSyncing && (
         <div className="scr on" id="landing" style={{ display: 'block' }}>
+          
           <nav>
             <a href="#marketing" className="nav-logo" onClick={e => { e.preventDefault(); window.scrollTo(0,0); }}>HUSHPOD</a>
             <div className="nav-links">
@@ -622,7 +708,7 @@ function App() {
             </div>
             <a href="#app" className="nav-cta" onClick={(e) => { e.preventDefault(); setView('app-entry'); window.scrollTo(0,0); }}>Start Listening Free →</a>
           </nav>
-          
+
           <div className="wrap">
             {/* ══ HERO ══ */}
             <section className="hero">
@@ -679,7 +765,7 @@ function App() {
                 <div className="step-card reveal"><div className="step-icon">🎙️</div><div className="step-num">01</div><div className="step-title">Create a Room</div><div className="step-desc">Enter your name, tap "Create Party Room". You get a unique 5-character room code instantly. Upload up to 10 songs from your device — MP3, WAV, FLAC, AAC all supported.</div></div>
                 <div className="step-card reveal" style={{ transitionDelay: '.1s' }}><div className="step-icon">📲</div><div className="step-num">02</div><div className="step-title">Share the Code</div><div className="step-desc">Send your room code or QR code to friends. They open HushPod in their browser, type the code, and they're in — no installation required. Works on any smartphone.</div></div>
                 <div className="step-card reveal" style={{ transitionDelay: '.2s' }}><div className="step-icon">🎧</div><div className="step-num">03</div><div className="step-title">Listen Together</div><div className="step-desc">Everyone hears the same audio at the same millisecond. The host controls play, pause, and the queue. Guests can suggest songs via the chat. Perfect sync, guaranteed.</div></div>
-                <div className="step-card reveal" style={{ transitionDelay: '.3s' }}><div className="step-icon">🔄</div><div className="step-num">04</div><div className="step-title">Pass the Aux</div><div className="step-desc">If the host leaves, the next listener becomes DJ automatically — the party never stops.</div></div>
+                <div className="step-card reveal" style={{ transitionDelay: '.3s' }}><div className="step-icon">🔄</div><div className="step-num">04</div><div className="step-title">Pass the Aux</div><div className="step-desc">Guests can request host privileges. The current host can pass control with one tap. If the host leaves, the next listener becomes DJ automatically — the party never stops.</div></div>
               </div>
             </section>
 
@@ -861,14 +947,13 @@ function App() {
       {view === 'app-entry' && !isSyncing && (
         <div className="scr on" id="app-entry" style={{alignItems:'center', justifyContent:'center', padding:'40px 20px', textAlign:'center', flex:1}}>
           <div style={{width:'100%', maxWidth:'340px', margin:'0 auto 20px auto', textAlign:'left'}}>
-            <button className="btn-ghost" style={{padding:'8px 16px', borderRadius:'8px', fontSize:'12px', cursor:'pointer', width:'auto'}} onClick={() => {setView('marketing'); window.scrollTo(0,0);}}>← Back to Home</button>
+            <button className="btn btn-ghost" style={{padding:'8px 16px', borderRadius:'8px', fontSize:'12px', cursor:'pointer', width:'auto'}} onClick={() => {setView('marketing'); window.scrollTo(0,0);}}>← Back to Home</button>
           </div>
           <div className="logo"><div className="logo-title" style={{marginBottom:'-5px', fontSize:'80px'}}>HUSH<br/>POD</div><div className="logo-sub">Listen together Privately</div></div>
           
           <div className="field" style={{maxWidth:'340px', margin:'0 auto'}}><label>Your name</label><input type="text" value={uname} onChange={e => setUname(e.target.value)} placeholder="Enter your name" maxLength="20" /></div>
           
           <div className="btns" style={{maxWidth:'340px', margin:'0 auto'}}>
-            {/* FIX: Corrected button classes */}
             <button className="btn btn-pink" onClick={attemptCreateRoom}>Create Party Room</button>
             <div style={{display:'flex', alignItems:'center', gap:'9px', color:'var(--sub)', fontSize:'12px', margin:'10px 0'}}>
               <span style={{flex:1, height:'1px', background:'var(--border)'}}></span>or join one<span style={{flex:1, height:'1px', background:'var(--border)'}}></span>
@@ -1004,11 +1089,9 @@ function App() {
                         <>
                           <div style={{display:'flex', justifyContent:'center', alignItems:'center', gap:'15px', marginTop:'10px'}}>
                             <button className="btn-ghost" style={{color: isShuffle ? 'var(--pink)' : 'var(--sub)', borderColor: isShuffle ? 'var(--pink)' : 'var(--border)', width:'40px', height:'40px', borderRadius:'8px', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => setIsShuffle(!isShuffle)}>🔀</button>
-                            
                             <button className="btn-ghost" style={{width:'44px', height:'44px', borderRadius:'50%', padding:0, fontSize:'18px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => handleSeek(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) - 10)}>⏮</button>
                             <button className="btn-pink" style={{width:'60px', height:'60px', borderRadius:'50%', padding:0, fontSize:'24px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={togglePlay}>{isPlaying ? '⏸' : '▶'}</button>
                             <button className="btn-ghost" style={{width:'44px', height:'44px', borderRadius:'50%', padding:0, fontSize:'18px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => handleSeek(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) + 10)}>⏭</button>
-                            
                             <button className="btn-ghost" style={{color: isLooping ? 'var(--pink)' : 'var(--sub)', borderColor: isLooping ? 'var(--pink)' : 'var(--border)', width:'40px', height:'40px', borderRadius:'8px', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => setIsLooping(!isLooping)}>🔁</button>
                           </div>
                         </>

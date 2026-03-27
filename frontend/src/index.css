@@ -224,7 +224,7 @@ footer{ background:var(--s1);border-top:1px solid var(--border); padding:60px 40
 .logo-sub{font-size:12px;font-weight:300;color:var(--sub);letter-spacing:4px;text-transform:uppercase;margin-top:10px}
 .field{width:100%;max-width:340px;margin:0 auto 22px}
 .field label{display:block;font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--sub);margin-bottom:8px;text-align:left}
-input[type=text]{width:100%;background:var(--s2);border:1px solid var(--border);border-radius:12px;padding:14px 18px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:16px;outline:none;transition:border-color .2s,box-shadow .2s}
+input[type=text]{width:100%;background:var(--s2);border:1px solid rgba(255,255,255,0.2);border-radius:12px;padding:14px 18px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:16px;outline:none;transition:border-color .2s,box-shadow .2s}
 input[type=text]:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(76,201,240,.12)}
 .btns{display:flex;flex-direction:column;gap:10px;width:100%;max-width:340px;margin:0 auto}
 .join-box{width:100%;max-width:340px;margin:12px auto 0;background:var(--s1);border:1px solid rgba(76,201,240,.25);border-radius:18px;padding:20px;}
