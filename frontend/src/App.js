@@ -485,6 +485,75 @@ function App() {
   }, []);
   // ----------------------------------------
 
+  const runSonarCalibration = async () => {
+    // Ensure AudioContext is running
+    if (!actxRef.current) return toast("Audio not initialized. Play a track first.", "err");
+    toast("Calibrating... Keep the room quiet!", "inf");
+
+    try {
+      // 1. Request RAW microphone access (bypass Apple/Google echo cancellation)
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } 
+      });
+      
+      const micSource = actxRef.current.createMediaStreamSource(stream);
+      const micAnalyser = actxRef.current.createAnalyser();
+      micSource.connect(micAnalyser);
+
+      const bufferLength = micAnalyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      const startTime = performance.now();
+      
+      // 2. Fire the Acoustic Transient (The Sonar Ping)
+      const osc = actxRef.current.createOscillator();
+      const clickGain = actxRef.current.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1200, actxRef.current.currentTime);
+      
+      // Sharp attack and decay to create a "click" not a "beep"
+      clickGain.gain.setValueAtTime(0, actxRef.current.currentTime);
+      clickGain.gain.linearRampToValueAtTime(1, actxRef.current.currentTime + 0.002);
+      clickGain.gain.linearRampToValueAtTime(0, actxRef.current.currentTime + 0.010);
+      
+      osc.connect(clickGain);
+      clickGain.connect(actxRef.current.destination);
+      osc.start();
+      osc.stop(actxRef.current.currentTime + 0.02);
+
+      // 3. Listen for the Sound Spike in the Air
+      const checkMic = () => {
+        micAnalyser.getByteFrequencyData(dataArray);
+        let volume = 0;
+        for (let i = 0; i < bufferLength; i++) if (dataArray[i] > volume) volume = dataArray[i];
+
+        if (volume > 180) { // Threshold for a clear click detection
+          const endTime = performance.now();
+          const latencySec = (endTime - startTime) / 1000;
+          
+          // 4. Inject precisely into your sync engine (cap between 10ms and 600ms)
+          stateRef.current.outLat = Math.max(0.010, Math.min(0.600, latencySec));
+          toast(`Sync Locked: ${(latencySec * 1000).toFixed(0)}ms latency detected`, "ok");
+          
+          // Kill the mic to save battery and prevent feedback
+          stream.getTracks().forEach(t => t.stop());
+        } else if (performance.now() - startTime < 2000) {
+          // Keep listening for up to 2 seconds
+          requestAnimationFrame(checkMic);
+        } else {
+          toast("Calibration failed. Turn up the volume and try again.", "err");
+          stream.getTracks().forEach(t => t.stop());
+        }
+      };
+      
+      // Start the listening loop
+      checkMic();
+
+    } catch (err) {
+      console.error("Mic Error:", err);
+      toast("Microphone access is required for Sonar Calibration.", "err");
+    }
+  };
+
   const setupSocketListeners = (sock) => {
     sock.on('song-changed', ({ songId, name, streamUrl, playState }) => {
       setCurrentSong({ id: songId, name, duration: 0 });
@@ -988,7 +1057,7 @@ function App() {
             <div style={{display:'flex', background:'var(--s2)', borderRadius:'12px', padding:'4px', border:'1px solid var(--border)'}}>
               <button onClick={()=>setRoomTab('party')} style={{flex:1, padding:'10px 5px', background: roomTab === 'party' ? 'var(--s1)' : 'transparent', color: roomTab==='party' ? 'var(--cyan)' : 'var(--sub)', border:'none', borderRadius:'8px', fontWeight:'600', cursor:'pointer', fontSize:'13px'}}>Party Hall</button>
               <button onClick={()=>setRoomTab('dj')} style={{flex:1, padding:'10px 5px', background: roomTab === 'dj' ? 'var(--s1)' : 'transparent', color: roomTab==='dj' ? 'var(--cyan)' : 'var(--sub)', border:'none', borderRadius:'8px', fontWeight:'600', cursor:'pointer', fontSize:'13px'}}>DJ Console</button>
-              <button onClick={()=>setRoomTab('orbit')} style={{flex:1, padding:'10px 5px', background: roomTab === 'orbit' ? 'var(--s1)' : 'transparent', color: roomTab==='orbit' ? 'var(--pink)' : 'var(--sub)', border:'none', borderRadius:'8px', fontWeight:'600', cursor:'pointer', fontSize:'13px'}}>Orbit 3D</button>
+              <button onClick={()=>setRoomTab('Labs 🧪')} style={{flex:1, padding:'10px 5px', background: roomTab === 'orbit' ? 'var(--s1)' : 'transparent', color: roomTab==='orbit' ? 'var(--pink)' : 'var(--sub)', border:'none', borderRadius:'8px', fontWeight:'600', cursor:'pointer', fontSize:'13px'}}>Orbit 3D</button>
               <button onClick={()=>setRoomTab('settings')} style={{flex:1, padding:'10px 5px', background: roomTab === 'settings' ? 'var(--s1)' : 'transparent', color: roomTab==='settings' ? 'var(--cyan)' : 'var(--sub)', border:'none', borderRadius:'8px', fontWeight:'600', cursor:'pointer', fontSize:'13px'}}>Settings</button>
             </div>
 
@@ -999,28 +1068,50 @@ function App() {
             )}
 
             {roomTab === 'orbit' && (
-              <div className="card" style={{padding: '10px'}}>
-                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', padding: '10px'}}>
-                  <div>
-                    <div style={{fontSize: '16px', fontWeight: '700', color: 'var(--pink)'}}>Spatial Orbit Engine</div>
-                    <div style={{fontSize: '12px', color: 'var(--sub)', marginTop: '4px'}}>Music physically travels around the room.</div>
-                  </div>
-                  {amHost && (
-                     <button className={`btn ${orbitActive ? 'btn-pink' : 'btn-ghost'}`} style={{width: 'auto', margin: 0, padding: '8px 16px', borderRadius: '8px', fontSize: '12px'}} onClick={() => socketRef.current.emit('set-orbit', {active: !orbitActive})}>
-                       {orbitActive ? 'Active' : 'Turn On'}
-                     </button>
-                  )}
-                </div>
-                <div style={{width: '100%', height: '350px', background: '#0a0a14', borderRadius: '16px', position: 'relative', overflow: 'hidden', border: '1px solid var(--border)'}}>
-                  <canvas id="orbit-canvas" style={{width: '100%', height: '100%', display: 'block'}}></canvas>
-                  {!orbitActive && (
-                    <div style={{position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(10,10,20,0.8)', color: 'var(--sub)', fontSize: '13px', fontWeight: '600', letterSpacing: '1px'}}>
-                      ORBIT IS OFFLINE
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
+  <div className="card" style={{padding: '10px', animation: 'fadeIn 0.3s ease'}}>
+    <div style={{marginBottom: '15px', padding: '5px 10px'}}>
+      <div style={{fontSize: '18px', fontWeight: '800', color: 'var(--pink)', letterSpacing: '-0.5px'}}>HushPod Labs</div>
+      <div style={{fontSize: '12px', color: 'var(--sub)', marginTop: '2px'}}>Experimental Hardware Features</div>
+    </div>
+
+    {/* PHASE 1: SONAR CALIBRATION DASHBOARD */}
+    <div style={{background: 'var(--s2)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border)', marginBottom: '15px', textAlign: 'center', boxShadow: 'inset 0 4px 20px rgba(0,0,0,0.2)'}}>
+      <div style={{fontSize: '12px', color: 'var(--sub)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '1px'}}>Acoustic Sync Latency</div>
+      
+      <div style={{fontSize: '36px', fontWeight: '900', fontFamily: 'monospace', color: 'var(--cyan)', marginBottom: '10px', textShadow: '0 0 10px rgba(0, 255, 255, 0.3)'}}>
+        {(stateRef.current.outLat * 1000).toFixed(0)}<span style={{fontSize: '16px', color: 'var(--sub)', marginLeft: '4px'}}>ms</span>
+      </div>
+      
+      <button 
+        className="btn btn-cyan" 
+        style={{width: '100%', maxWidth: '200px', margin: '10px auto', padding: '12px', fontSize: '14px', fontWeight: '700', borderRadius: '8px'}}
+        onClick={() => runSonarCalibration()}
+      >
+        <span style={{marginRight: '8px'}}>🔊</span> Run Sonar Ping
+      </button>
+      
+      <p style={{fontSize: '11px', color: 'var(--sub)', marginTop: '12px', lineHeight: '1.4'}}>
+        Hold your Bluetooth speaker or earbuds near this device's microphone to automatically calculate hardware delay.
+      </p>
+    </div>
+
+    {/* LEGACY ORBIT VISUALIZER */}
+    <div style={{width: '100%', height: '200px', background: '#05050a', borderRadius: '12px', position: 'relative', overflow: 'hidden', border: '1px solid var(--border)'}}>
+      <canvas id="orbit-canvas" style={{width: '100%', height: '100%', display: 'block'}}></canvas>
+      <div style={{position: 'absolute', top: '10px', right: '10px', zIndex: 10}}>
+         {amHost && (
+            <button 
+              className={`btn-ghost ${orbitActive ? 'on' : ''}`} 
+              style={{fontSize: '10px', padding: '6px 10px', width: 'auto', background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)'}} 
+              onClick={() => socketRef.current.emit('set-orbit', {active: !orbitActive})}
+            >
+              {orbitActive ? 'Orbit: LIVE' : 'Orbit: OFF'}
+            </button>
+         )}
+      </div>
+    </div>
+  </div>
+)}
 
             {roomTab === 'party' && (
               <>
