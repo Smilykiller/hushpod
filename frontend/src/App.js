@@ -92,6 +92,38 @@ function App() {
       window.removeEventListener('touchstart', unlockAudio);
     };
   }, []);
+  // --- BLUETOOTH / HARDWARE DISCONNECT DETECTOR ---
+  useEffect(() => {
+    const handleDeviceChange = () => {
+      // If the hardware changes and we were previously calibrated...
+      if (stateRef.current.isCalibrated) {
+        toast("Audio hardware changed. Resetting sync...", "inf");
+
+        // 1. Reset latency back to a fast, built-in speaker default (50ms)
+        stateRef.current.outLat = 0.050;
+        stateRef.current.isCalibrated = false; // Demand recalibration if they want perfect BT sync again
+
+        // 2. Force an immediate Deep Sync snap
+        if (stateRef.current.localPlayState && audioBufferRef.current) {
+           const currentPos = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
+           // Re-trigger the play state. Because outLat is now 0.050, the math will instantly adjust!
+           applyPlayState(true, currentPos, sNow(), false);
+        }
+      }
+    };
+
+    // Listen to the OS for any hardware routing changes
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    }
+
+    return () => {
+      if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
+        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (view === 'marketing') {
@@ -1156,6 +1188,27 @@ function App() {
             )}
 
            <div style={{ display: roomTab === 'dj' ? 'block' : 'none' }}>
+            
+            {/* SMART BLUETOOTH ROUTING NOTE */}
+            <div style={{
+              background: 'rgba(247,37,133,0.05)', 
+              border: '1px solid rgba(247,37,133,0.2)', 
+              borderRadius: '8px', 
+              padding: '10px 14px', 
+              marginBottom: '15px', 
+              fontSize: '12px', 
+              color: 'var(--sub)', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '10px'
+            }}>
+              <span style={{fontSize: '16px'}}>🔊</span>
+              <div style={{flex: 1, lineHeight: '1.4'}}>
+                <strong style={{color: 'var(--text)'}}>Using a Bluetooth speaker?</strong><br/>
+                Bluetooth creates an audio echo. Go to the <span onClick={() => setRoomTab('orbit')} style={{color: 'var(--pink)', cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline'}}>Labs 🧪 tab</span> to calibrate this specific device.
+              </div>
+            </div>
+            
   {(amHost || guestUploads) && !currentSong && (
     <div className="upload-wrap" style={{border:'2px dashed var(--border)', borderRadius:'14px', padding:'26px 18px', textAlign:'center', cursor:'pointer', background:'var(--s2)', position:'relative'}}>
       <input type="file" accept="audio/*" multiple onChange={e => uploadSongs(e.target.files)} style={{position:'absolute', inset:0, opacity:0, cursor:'pointer', width:'100%', height:'100%'}} />
