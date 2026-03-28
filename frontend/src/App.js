@@ -45,6 +45,7 @@ function App() {
   const gainNodeRef = useRef(null);
   const pannerNodeRef = useRef(null);
   const analyserRef = useRef(null);
+  const trackCacheRef = useRef({}); // PHASE 2: Stores downloaded songs in RAM
   
   const stateRef = useRef({ clockOff: 0, songOffset: 0, nodeStartTime: 0, localPlayState: false, amHost: false, queue: [], loop: false, shuffle: false, currentSongId: null, uname: '', members: [], globalVolume: 1.0, orbitActive: false });
   
@@ -178,10 +179,10 @@ function App() {
           const hostUser = res.members.find(m => m.isHost);
           document.title = `HushPod | ${hostUser ? hostUser.name : 'Room'}'s Party`;
 
-          if(res.currentSong) {
-            setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
-            guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true);
-          }
+         if(res.currentSong) {
+          setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
+          guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true, res.currentSong.songId);
+        }
           setIsSyncing(false); // Hide global loader
           setRoomTab('dj'); setView('room');
         });
@@ -358,15 +359,40 @@ function App() {
     stateRef.current.localPlayState = true; setIsPlaying(true); drawVisualizer();
   };
 
-  const guestLoadAndSync = async (url, playState, isNewJoiner = false) => {
+  const prefetchQueue = async (q) => {
+    if (!actxRef.current) return;
+    for (const song of q) {
+      if (!trackCacheRef.current[song.id]) {
+        try {
+          trackCacheRef.current[song.id] = 'fetching'; // Lock to prevent double download
+          const res = await fetch(SERVER + song.streamUrl);
+          const arrayBuffer = await res.arrayBuffer();
+          const decoded = await actxRef.current.decodeAudioData(arrayBuffer);
+          trackCacheRef.current[song.id] = decoded; // Save audio to RAM
+        } catch(e) {
+          delete trackCacheRef.current[song.id]; // Unlock if failed
+        }
+      }
+    }
+  };
+
+  const guestLoadAndSync = async (url, playState, isNewJoiner = false, songId = null) => {
     stopAudio(); audioBufferRef.current = null;
-    if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Downloading track...' });
+    if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Loading track...' });
     
     try {
-      const res = await fetch(url);
-      const arrayBuffer = await res.arrayBuffer();
-      audioBufferRef.current = await actxRef.current.decodeAudioData(arrayBuffer);
-      applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
+      // PHASE 2: Check RAM Cache First!
+      if (songId && trackCacheRef.current[songId] && trackCacheRef.current[songId] !== 'fetching') {
+        audioBufferRef.current = trackCacheRef.current[songId]; // INSTANT LOAD (0ms)
+        applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
+      } else {
+        // FALLBACK: Network Fetch
+        const res = await fetch(url);
+        const arrayBuffer = await res.arrayBuffer();
+        audioBufferRef.current = await actxRef.current.decodeAudioData(arrayBuffer);
+        if (songId) trackCacheRef.current[songId] = audioBufferRef.current; // Save for later
+        applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
+      }
     } catch(e) { if (!stateRef.current.amHost) setSyncState({ state: 'fixing', label: 'Error loading track' }); }
   };
 
@@ -590,7 +616,7 @@ function App() {
     sock.on('song-changed', ({ songId, name, streamUrl, playState }) => {
       setCurrentSong({ id: songId, name, duration: 0 });
       document.title = `HushPod | ${name}`;
-      guestLoadAndSync(SERVER + streamUrl, playState, !stateRef.current.amHost);
+      guestLoadAndSync(SERVER + streamUrl, playState, !stateRef.current.amHost, songId);
     });
 
     sock.on('play-scheduled', ({ currentTime, targetTs }) => {
@@ -625,7 +651,10 @@ function App() {
       }
     });
 
-    sock.on('queue-updated', ({ queue }) => setQueue(queue));
+    sock.on('queue-updated', ({ queue }) => { 
+      setQueue(queue);
+      prefetchQueue(queue); // Phase 2: Start background downloading
+    });
     
     sock.on('chat-msg', ({ name, text }) => { 
       setChat(prev => [...prev, { name, text }]); 
