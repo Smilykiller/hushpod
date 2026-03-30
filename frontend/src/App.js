@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { QRCodeSVG } from 'qrcode.react';
+import './App.css';
 
 const SERVER = window.location.port === '3000' ? `http://${window.location.hostname}:5000` : window.location.origin;
 
@@ -1105,6 +1106,7 @@ function App() {
       )}
 
       {/* ── THE RESTORED ROOM VIEW (WITH NEON LOADER & BLUETOOTH NOTE) ── */}
+      {/* ── THE COMPLETE ROOM VIEW (ALL 5 TABS RESTORED) ── */}
       {view === 'room' && !isSyncing && (
         <div id="room" className="scr on" style={{ display: 'flex' }}>
           <div className="rhead">
@@ -1123,15 +1125,18 @@ function App() {
           </div>
 
           <div className="rbody">
-            <div style={{display: 'flex', gap: '10px', marginBottom: '10px', background: 'var(--s1)', padding: '5px', borderRadius: '12px', border: '1px solid var(--border)'}}>
-              <button onClick={() => setRoomTab('dj')} style={{flex: 1, padding: '10px 5px', background: roomTab === 'dj' ? 'var(--s2)' : 'transparent', color: roomTab === 'dj' ? 'var(--cyan)' : 'var(--sub)', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '13px'}}>DJ Desk</button>
-              <button onClick={() => setRoomTab('orbit')} style={{flex: 1, padding: '10px 5px', background: roomTab === 'orbit' ? 'var(--s2)' : 'transparent', color: roomTab === 'orbit' ? 'var(--pink)' : 'var(--sub)', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '13px'}}>Labs 🧪</button>
+            
+            {/* --- UPDATED NAVIGATION WITH ALL 5 TABS --- */}
+            <div style={{display: 'flex', gap: '6px', marginBottom: '10px', background: 'var(--s1)', padding: '6px', borderRadius: '12px', border: '1px solid var(--border)', overflowX: 'auto', whiteSpace: 'nowrap'}}>
+              <button onClick={() => setRoomTab('dj')} style={{flex: 1, padding: '10px 8px', background: roomTab === 'dj' ? 'var(--s2)' : 'transparent', color: roomTab === 'dj' ? 'var(--cyan)' : 'var(--sub)', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '13px'}}>DJ Desk</button>
+              <button onClick={() => setRoomTab('members')} style={{flex: 1, padding: '10px 8px', background: roomTab === 'members' ? 'var(--s2)' : 'transparent', color: roomTab === 'members' ? 'var(--text)' : 'var(--sub)', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '13px'}}>Listeners</button>
+              <button onClick={() => setRoomTab('chat')} style={{flex: 1, padding: '10px 8px', background: roomTab === 'chat' ? 'var(--s2)' : 'transparent', color: roomTab === 'chat' ? 'var(--text)' : 'var(--sub)', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '13px'}}>Chat</button>
+              <button onClick={() => setRoomTab('settings')} style={{flex: 1, padding: '10px 8px', background: roomTab === 'settings' ? 'var(--s2)' : 'transparent', color: roomTab === 'settings' ? 'var(--text)' : 'var(--sub)', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '13px'}}>Settings</button>
+              <button onClick={() => setRoomTab('orbit')} style={{flex: 1, padding: '10px 8px', background: roomTab === 'orbit' ? 'var(--s2)' : 'transparent', color: roomTab === 'orbit' ? 'var(--pink)' : 'var(--sub)', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '13px'}}>Labs 🧪</button>
             </div>
 
             {/* --- DJ TAB --- */}
             <div style={{ display: roomTab === 'dj' ? 'block' : 'none' }}>
-              
-              {/* SMART BLUETOOTH ROUTING NOTE */}
               <div style={{
                 background: 'rgba(247,37,133,0.05)', 
                 border: '1px solid rgba(247,37,133,0.2)', 
@@ -1171,8 +1176,6 @@ function App() {
                     <div style={{fontSize:'13px', color:'var(--sub)', fontWeight:'300', marginBottom:'16px'}}>Status: <span style={{color: isPlaying ? 'var(--green)' : 'var(--sub)', fontWeight:'600'}}>{isPlaying ? 'Playing' : 'Paused'}</span></div>
                     
                     <div style={{width:'100%', height:'70px', margin:'15px 0', background:'transparent', borderRadius:'8px', border:'1px solid var(--border)', overflow:'hidden', position: 'relative'}}>
-                      
-                      {/* THE NEON LOADER OVERLAY */}
                       {!trackReady && (
                         <div style={{position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 5}}>
                           <div className="eq-container" style={{transform: 'scale(0.5)'}}>
@@ -1181,7 +1184,6 @@ function App() {
                           <span style={{fontSize: '11px', color: 'var(--cyan)', marginLeft: '10px', fontWeight: 'bold', letterSpacing: '2px'}}>DECODING AUDIO...</span>
                         </div>
                       )}
-
                       <canvas id="viz-canvas" style={{width:'100%', height:'100%', display:'block'}}></canvas>
                     </div>
 
@@ -1195,22 +1197,13 @@ function App() {
                     </div>
                     
                     {amHost && (
-                      <>
-                        <div style={{display:'flex', justifyContent:'center', alignItems:'center', gap:'15px', marginTop:'10px'}}>
-                          <button className="btn-ghost" style={{color: isShuffle ? 'var(--pink)' : 'var(--sub)', borderColor: isShuffle ? 'var(--pink)' : 'var(--border)', width:'40px', height:'40px', borderRadius:'8px', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => setIsShuffle(!isShuffle)}>🔀</button>
-                          <button className="btn-ghost" style={{width:'44px', height:'44px', borderRadius:'50%', padding:0, fontSize:'18px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => handleSeek(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) - 10)}>⏮</button>
-                          <button 
-                            className="btn-pink" 
-                            style={{width:'60px', height:'60px', borderRadius:'50%', padding:0, fontSize:'24px', display:'flex', alignItems:'center', justifyContent:'center', margin:0, opacity: trackReady ? 1 : 0.4, cursor: trackReady ? 'pointer' : 'not-allowed', transition: 'all 0.3s'}} 
-                            onClick={() => { if (trackReady) togglePlay(); }}
-                            disabled={!trackReady}
-                          >
-                            {isPlaying ? '⏸' : '▶'}
-                          </button>
-                          <button className="btn-ghost" style={{width:'44px', height:'44px', borderRadius:'50%', padding:0, fontSize:'18px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => handleSeek(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) + 10)}>⏭</button>
-                          <button className="btn-ghost" style={{color: isLooping ? 'var(--pink)' : 'var(--sub)', borderColor: isLooping ? 'var(--pink)' : 'var(--border)', width:'40px', height:'40px', borderRadius:'8px', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => setIsLooping(!isLooping)}>🔁</button>
-                        </div>
-                      </>
+                      <div style={{display:'flex', justifyContent:'center', alignItems:'center', gap:'15px', marginTop:'10px'}}>
+                        <button className="btn-ghost" style={{color: isShuffle ? 'var(--pink)' : 'var(--sub)', borderColor: isShuffle ? 'var(--pink)' : 'var(--border)', width:'40px', height:'40px', borderRadius:'8px', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => setIsShuffle(!isShuffle)}>🔀</button>
+                        <button className="btn-ghost" style={{width:'44px', height:'44px', borderRadius:'50%', padding:0, fontSize:'18px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => handleSeek(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) - 10)}>⏮</button>
+                        <button className="btn-pink" style={{width:'60px', height:'60px', borderRadius:'50%', padding:0, fontSize:'24px', display:'flex', alignItems:'center', justifyContent:'center', margin:0, opacity: trackReady ? 1 : 0.4, cursor: trackReady ? 'pointer' : 'not-allowed', transition: 'all 0.3s'}} onClick={() => { if (trackReady) togglePlay(); }} disabled={!trackReady}>{isPlaying ? '⏸' : '▶'}</button>
+                        <button className="btn-ghost" style={{width:'44px', height:'44px', borderRadius:'50%', padding:0, fontSize:'18px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => handleSeek(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) + 10)}>⏭</button>
+                        <button className="btn-ghost" style={{color: isLooping ? 'var(--pink)' : 'var(--sub)', borderColor: isLooping ? 'var(--pink)' : 'var(--border)', width:'40px', height:'40px', borderRadius:'8px', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => setIsLooping(!isLooping)}>🔁</button>
+                      </div>
                     )}
                   </div>
                 )}
@@ -1219,16 +1212,9 @@ function App() {
               <div className="card">
                 <div className="card-label">Queue {(amHost || guestUploads) && currentSong && <button className="btn-ghost" style={{margin:0, padding: '4px 10px', width:'auto', borderRadius:'6px', fontSize:'11px'}} onClick={() => document.getElementById('q-file')?.click()}>+ Add</button>}</div>
                 {(amHost || guestUploads) && <input type="file" id="q-file" style={{display:'none'}} accept="audio/*" multiple onChange={e => uploadSongs(e.target.files)} />}
-                
                 <div style={{display:'flex', flexDirection:'column', gap:'8px'}}>
                   {queue.length === 0 ? <div style={{fontSize:'13px', color:'var(--sub)', textAlign:'center', padding:'12px 0'}}>No songs queued</div> : queue.map((s, i) => (
-                    <div key={s.id} 
-                      draggable={amHost}
-                      onDragStart={() => setDraggedIdx(i)}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => handleDrop(e, i)}
-                      style={{background:'var(--s2)', padding:'10px 14px', borderRadius:'12px', fontSize:'14px', display:'flex', justifyContent:'space-between', alignItems:'center', border: currentSong?.id === s.id ? '1px solid var(--pink)' : '1px solid var(--border)', fontWeight:'500', cursor: amHost ? 'grab' : 'default', opacity: draggedIdx === i ? 0.5 : 1}}
-                    >
+                    <div key={s.id} draggable={amHost} onDragStart={() => setDraggedIdx(i)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleDrop(e, i)} style={{background:'var(--s2)', padding:'10px 14px', borderRadius:'12px', fontSize:'14px', display:'flex', justifyContent:'space-between', alignItems:'center', border: currentSong?.id === s.id ? '1px solid var(--pink)' : '1px solid var(--border)', fontWeight:'500', cursor: amHost ? 'grab' : 'default', opacity: draggedIdx === i ? 0.5 : 1}}>
                       {amHost && <span style={{marginRight:'10px', cursor:'grab', color:'var(--sub)'}}>☰</span>}
                       <div style={{flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{s.name}</div>
                       {amHost && currentSong?.id !== s.id && <button className="btn-ghost" style={{fontSize:'12px', color:'var(--cyan)', fontWeight:'600', padding:'4px 10px', borderRadius:'6px', border:'1px solid rgba(76,201,240,.3)', background:'var(--s3)', cursor:'pointer', flexShrink:0, width:'auto', margin:0}} onClick={() => socketRef.current.emit('play-song', { songId: s.id, autoPlay: true })}>Play</button>}
@@ -1236,6 +1222,82 @@ function App() {
                       {currentSong?.id !== s.id && !amHost && <button className="btn-ghost" style={{background:'var(--s3)', color:'var(--cyan)', border:'1px solid rgba(76,201,240,.3)', padding:'4px 10px', borderRadius:'6px', cursor:'pointer', fontWeight:'700', fontSize:'11px', width:'auto', margin:0}} onClick={() => socketRef.current.emit('upvote', { songId: s.id })}>▲ {s.upvotes || 0}</button>}
                     </div>
                   ))}
+                </div>
+              </div>
+            </div>
+
+            {/* --- LISTENERS TAB --- */}
+            <div style={{ display: roomTab === 'members' ? 'block' : 'none' }}>
+              <div className="card">
+                <div className="card-label">Listeners ({members.length})</div>
+                <div style={{display:'flex', flexDirection:'column', gap:'8px'}}>
+                  {members.map(m => (
+                    <div key={m.id} style={{background:'var(--s2)', padding:'10px 14px', borderRadius:'12px', fontSize:'14px', display:'flex', justifyContent:'space-between', alignItems:'center', border:'1px solid var(--border)'}}>
+                      <div>
+                        <span style={{fontWeight:'600'}}>{m.name}</span> {m.id === socketRef.current?.id && <span style={{fontSize:'11px', color:'var(--sub)', marginLeft:'6px'}}>(You)</span>}
+                        {m.isHost && <span style={{fontSize:'11px', color:'var(--pink)', marginLeft:'6px', fontWeight:'bold'}}>HOST</span>}
+                        {!m.isHost && stateRef.current.admins?.includes(m.id) && <span style={{fontSize:'11px', color:'var(--cyan)', marginLeft:'6px', fontWeight:'bold'}}>DJ</span>}
+                      </div>
+                      {amHost && m.id !== socketRef.current?.id && (
+                        <div style={{display:'flex', gap:'6px'}}>
+                          {!stateRef.current.admins?.includes(m.id) ? 
+                            <button className="btn-ghost" style={{padding:'4px 8px', fontSize:'11px', margin:0, width:'auto'}} onClick={() => socketRef.current.emit('make-admin', {targetId: m.id})}>Make DJ</button> :
+                            <button className="btn-ghost" style={{padding:'4px 8px', fontSize:'11px', margin:0, width:'auto', color:'var(--yellow)'}} onClick={() => socketRef.current.emit('remove-admin', {targetId: m.id})}>Remove DJ</button>
+                          }
+                          <button className="btn-red" style={{padding:'4px 8px', fontSize:'11px', margin:0, width:'auto'}} onClick={() => socketRef.current.emit('transfer-host', {targetId: m.id})}>Make Host</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* --- CHAT TAB --- */}
+            <div style={{ display: roomTab === 'chat' ? 'block' : 'none' }}>
+              <div className="card">
+                <div className="card-label">Room Chat</div>
+                <div className="chat-wrap" ref={chatBoxRef} style={{height:'300px', maxHeight:'none'}}>
+                  {chat.length === 0 ? <div style={{color:'var(--sub)', fontSize:'13px', textAlign:'center', marginTop:'20px'}}>No messages yet</div> : chat.map((c, i) => (
+                    <div key={i} style={{marginBottom:'8px'}}>
+                      <strong style={{color: c.name === uname ? 'var(--cyan)' : 'var(--pink)'}}>{c.name}: </strong>
+                      <span style={{color:'var(--text)'}}>{c.text}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{display:'flex', gap:'8px', marginTop:'10px'}}>
+                  <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleChat()} placeholder="Suggest a song..." style={{flex:1, padding:'10px 14px', background:'var(--s2)', border:'1px solid var(--border)', borderRadius:'8px', color:'var(--text)', outline:'none'}} />
+                  <button className="btn-cyan" style={{width:'auto', margin:0, padding:'0 20px'}} onClick={handleChat}>Send</button>
+                </div>
+              </div>
+            </div>
+
+            {/* --- SETTINGS TAB --- */}
+            <div style={{ display: roomTab === 'settings' ? 'block' : 'none' }}>
+              <div className="card">
+                <div className="card-label">Room Settings</div>
+                
+                <div style={{background:'var(--s2)', padding:'16px', borderRadius:'12px', border:'1px solid var(--border)', marginBottom:'12px'}}>
+                  <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px'}}>
+                    <div>
+                      <div style={{fontSize:'14px', fontWeight:'600'}}>Guest Uploads</div>
+                      <div style={{fontSize:'11px', color:'var(--sub)'}}>Allow listeners to add songs to queue</div>
+                    </div>
+                    {amHost ? (
+                      <label style={{position:'relative', display:'inline-block', width:'44px', height:'24px'}}>
+                        <input type="checkbox" checked={guestUploads} onChange={e => { setGuestUploads(e.target.checked); socketRef.current.emit('toggle-guest-uploads', {allowed: e.target.checked}); }} style={{opacity:0, width:0, height:0}} />
+                        <span style={{position:'absolute', cursor:'pointer', top:0, left:0, right:0, bottom:0, background: guestUploads ? 'var(--green)' : 'var(--s3)', borderRadius:'24px', transition:'.4s'}}><span style={{position:'absolute', height:'18px', width:'18px', left: guestUploads ? '22px' : '3px', bottom:'3px', background:'white', borderRadius:'50%', transition:'.4s'}}></span></span>
+                      </label>
+                    ) : (
+                      <div style={{fontSize:'12px', fontWeight:'bold', color: guestUploads ? 'var(--green)' : 'var(--pink)'}}>{guestUploads ? 'ENABLED' : 'LOCKED'}</div>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{background:'var(--s2)', padding:'16px', borderRadius:'12px', border:'1px solid var(--border)'}}>
+                  <div style={{fontSize:'14px', fontWeight:'600', marginBottom:'4px'}}>Global Volume ({Math.round(globalVolume * 100)}%)</div>
+                  <div style={{fontSize:'11px', color:'var(--sub)', marginBottom:'12px'}}>Adjust max volume for everyone</div>
+                  <input type="range" min="0" max="1" step="0.05" value={globalVolume} onChange={handleGlobalVolume} disabled={!amHost} style={{width:'100%', accentColor:'var(--cyan)', cursor: amHost ? 'pointer' : 'default'}} />
                 </div>
               </div>
             </div>
@@ -1248,38 +1310,20 @@ function App() {
                   <div style={{fontSize: '12px', color: 'var(--sub)', marginTop: '2px'}}>Phase 1: Acoustic Hardware Calibration</div>
                 </div>
 
-                {/* SONAR CALIBRATION DASHBOARD */}
                 <div style={{background: 'var(--s2)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border)', marginBottom: '15px', textAlign: 'center'}}>
                   <div style={{fontSize: '12px', color: 'var(--sub)', marginBottom: '8px', textTransform: 'uppercase'}}>Local Device Latency</div>
-                  
                   <div style={{fontSize: '36px', fontWeight: '900', fontFamily: 'monospace', color: 'var(--cyan)', marginBottom: '10px'}}>
                     {stateRef.current.outLat ? (stateRef.current.outLat * 1000).toFixed(0) : 0}<span style={{fontSize: '16px', color: 'var(--sub)', marginLeft: '4px'}}>ms</span>
                   </div>
-                  
-                  <button 
-                    className="btn btn-cyan" 
-                    style={{width: '100%', maxWidth: '200px', margin: '10px auto', padding: '12px', fontSize: '14px', fontWeight: '700', borderRadius: '8px'}}
-                    onClick={() => runSonarCalibration()}
-                  >
-                    🔊 Run Sonar Ping
-                  </button>
-                  <p style={{fontSize: '11px', color: 'var(--sub)', marginTop: '10px', lineHeight: '1.4'}}>
-                    Only run this on the specific device connected to the Bluetooth speaker. Hold the speaker near the microphone to measure the air delay.
-                  </p>
+                  <button className="btn btn-cyan" style={{width: '100%', maxWidth: '200px', margin: '10px auto', padding: '12px', fontSize: '14px', fontWeight: '700', borderRadius: '8px'}} onClick={() => runSonarCalibration()}>🔊 Run Sonar Ping</button>
+                  <p style={{fontSize: '11px', color: 'var(--sub)', marginTop: '10px', lineHeight: '1.4'}}>Only run this on the specific device connected to the Bluetooth speaker. Hold the speaker near the microphone to measure the air delay.</p>
                 </div>
 
-                {/* ORBIT VISUALIZER */}
                 <div style={{width: '100%', height: '200px', background: '#05050a', borderRadius: '12px', position: 'relative', overflow: 'hidden', border: '1px solid var(--border)'}}>
                   <canvas id="orbit-canvas" style={{width: '100%', height: '100%', display: 'block'}}></canvas>
                   <div style={{position: 'absolute', top: '10px', right: '10px', zIndex: 10}}>
                      {amHost && (
-                        <button 
-                          className={`btn-ghost ${orbitActive ? 'on' : ''}`} 
-                          style={{fontSize: '10px', padding: '6px 10px', background: 'rgba(0,0,0,0.5)', width: 'auto'}} 
-                          onClick={() => socketRef.current.emit('set-orbit', {active: !orbitActive})}
-                        >
-                          {orbitActive ? 'Orbit: LIVE' : 'Orbit: OFF'}
-                        </button>
+                        <button className={`btn-ghost ${orbitActive ? 'on' : ''}`} style={{fontSize: '10px', padding: '6px 10px', background: 'rgba(0,0,0,0.5)', width: 'auto'}} onClick={() => socketRef.current.emit('set-orbit', {active: !orbitActive})}>{orbitActive ? 'Orbit: LIVE' : 'Orbit: OFF'}</button>
                      )}
                   </div>
                 </div>
