@@ -639,7 +639,6 @@ function App() {
     sock.on('heartbeat', ({ currentTime, ts }) => {
       if (stateRef.current.amHost || !stateRef.current.localPlayState || !audioBufferRef.current) return;
       
-      // Calculate real-world target time including hardware latency
       const outLat = stateRef.current.outLat || 0.060;
       const elapsed = (sNow() - ts) / 1000;
       const expectedTime = currentTime + elapsed + outLat;
@@ -648,13 +647,17 @@ function App() {
       const drift = expectedTime - actualTime;
       const absDrift = Math.abs(drift);
 
-      // Deep Sync: Hard seek if terrible, invisible micro-speed adjustment if slightly off
-      if (absDrift > 0.500) {
+      // 1. Hard seek if drift > 150ms (Prevents stadium echo)
+      if (absDrift > 0.150) {
           applyPlayState(true, currentTime, ts, false);
-      } else if (absDrift > 0.020 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          const correction = Math.min(0.04, absDrift * 0.8);
+      } 
+      // 2. Micro-adjust only if drift > 30ms. Cap at 0.4% speed change (Acoustically Invisible!)
+      else if (absDrift > 0.030 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          const correction = Math.min(0.004, absDrift * 0.1);
           sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.0 + correction : 1.0 - correction;
-      } else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+      } 
+      // 3. Perfect play state
+      else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
           sourceNodeRef.current.playbackRate.value = 1.0;
       }
     });
