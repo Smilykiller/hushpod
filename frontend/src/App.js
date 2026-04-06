@@ -16,6 +16,8 @@ function App() {
 
   const [uname, setUname] = useState('');
   const [roomCode, setRoomCode] = useState('');
+  
+  // FIX 1: Loader starts TRUE to cover the initial page load & refresh
   const [isSyncing, setIsSyncing] = useState(true);
   
   const [codeInput, setCodeInput] = useState('');
@@ -45,7 +47,7 @@ function App() {
   const gainNodeRef = useRef(null);
   const pannerNodeRef = useRef(null);
   const analyserRef = useRef(null);
-  const trackCacheRef = useRef({}); 
+  const trackCacheRef = useRef({}); // PHASE 2: Stores downloaded songs in RAM
   
   const stateRef = useRef({ clockOff: 0, songOffset: 0, nodeStartTime: 0, localPlayState: false, amHost: false, queue: [], loop: false, shuffle: false, currentSongId: null, uname: '', members: [], globalVolume: 1.0, orbitActive: false });
   
@@ -63,6 +65,7 @@ function App() {
     toastTmr.current = setTimeout(() => setToastData(t => ({ ...t, visible: false })), 3000);
   };
 
+  // Safely find our user in the room list and check if they hold the true Host badge
   const myMemberData = members.find(m => m.id === socketRef.current?.id);
   const amHost = myMemberData ? myMemberData.isHost : false;
 
@@ -78,6 +81,7 @@ function App() {
     stateRef.current.orbitActive = orbitActive;
   }, [queue, isLooping, isShuffle, currentSong, uname, amHost, members, globalVolume, orbitActive]);
 
+  // FIX 2: Global Mobile Audio Unlocker - Eliminates deep sync lags on mobile Safari/Chrome
   useEffect(() => {
     const unlockAudio = () => {
       if (actxRef.current && actxRef.current.state === 'suspended') {
@@ -91,22 +95,31 @@ function App() {
       window.removeEventListener('touchstart', unlockAudio);
     };
   }, []);
-
+  // --- BLUETOOTH / HARDWARE DISCONNECT DETECTOR ---
   useEffect(() => {
     const handleDeviceChange = () => {
+      // If the hardware changes and we were previously calibrated...
       if (stateRef.current.isCalibrated) {
         toast("Audio hardware changed. Resetting sync...", "inf");
+
+        // 1. Reset latency back to a fast, built-in speaker default (50ms)
         stateRef.current.outLat = 0.050;
-        stateRef.current.isCalibrated = false; 
+        stateRef.current.isCalibrated = false; // Demand recalibration if they want perfect BT sync again
+
+        // 2. Force an immediate Deep Sync snap
         if (stateRef.current.localPlayState && audioBufferRef.current) {
            const currentPos = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
+           // Re-trigger the play state. Because outLat is now 0.050, the math will instantly adjust!
            applyPlayState(true, currentPos, sNow(), false);
         }
       }
     };
+
+    // Listen to the OS for any hardware routing changes
     if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
       navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
     }
+
     return () => {
       if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
         navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
@@ -149,6 +162,8 @@ function App() {
             setIsSyncing(false);
             return toast(res.error, 'err'); 
           }
+
+          // FIX 3: 15 Person Limit check on reconnect
           if (res.members && res.members.length > 15) {
              sessionStorage.removeItem('hushpod_session');
              if (socketRef.current) {
@@ -170,12 +185,12 @@ function App() {
           setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
           guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true, res.currentSong.songId);
         }
-          setIsSyncing(false); 
+          setIsSyncing(false); // Hide global loader
           setRoomTab('dj'); setView('room');
         });
       });
     } else {
-      setIsSyncing(false); 
+      setIsSyncing(false); // No session, drop the loader instantly
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -242,6 +257,7 @@ function App() {
     if (!actxRef.current) {
       actxRef.current = new (window.AudioContext || window.webkitAudioContext)();
       
+      // RESTORED: Calculate Physical Speaker/Bluetooth Latency
       stateRef.current.outLat = Math.max(0.020, Math.min(0.150, actxRef.current.outputLatency || actxRef.current.baseLatency || 0.060));
       
       gainNodeRef.current = actxRef.current.createGain();
@@ -249,6 +265,7 @@ function App() {
       analyserRef.current = actxRef.current.createAnalyser();
       analyserRef.current.fftSize = 128;
       
+      // ORBIT AUDIO ROUTING
       pannerNodeRef.current.connect(analyserRef.current);
       analyserRef.current.connect(gainNodeRef.current);
       gainNodeRef.current.connect(actxRef.current.destination);
@@ -264,6 +281,7 @@ function App() {
       socketRef.current = io(SERVER, { transports: ['websocket', 'polling'] });
       setupSocketListeners(socketRef.current);
       
+      // Silent Reconnect logic
       socketRef.current.on('connect', () => {
          if (stateRef.current.uname && roomCode) {
              socketRef.current.emit('join-room', { code: roomCode, name: stateRef.current.uname, claimHost: false }, () => {});
@@ -284,12 +302,14 @@ function App() {
         clearTimeout(tid);
         const { t } = await r.json(); 
         const rtt = t4 - t1;
+        // Restored: Ignore laggy packets, use high-precision performance clock
         if (rtt < 150) samples.push({ offset: t + (rtt / 2) - Date.now(), rtt });
       } catch {}
       await new Promise(res => setTimeout(res, 40)); 
     }
     if (samples.length > 0) {
       samples.sort((a, b) => a.rtt - b.rtt);
+      // Restored: Median of top 3 is much safer than Average
       const offs = samples.slice(0, 3).map(s => s.offset).sort((a, b) => a - b);
       stateRef.current.clockOff = offs[Math.floor(offs.length / 2)];
     }
@@ -312,6 +332,7 @@ function App() {
     sourceNodeRef.current = actxRef.current.createBufferSource();
     sourceNodeRef.current.buffer = audioBufferRef.current;
     
+    // Connect to Orbit Spatial Engine
     sourceNodeRef.current.connect(pannerNodeRef.current);
 
     sourceNodeRef.current.onended = () => {
@@ -345,13 +366,13 @@ function App() {
     for (const song of q) {
       if (!trackCacheRef.current[song.id]) {
         try {
-          trackCacheRef.current[song.id] = 'fetching'; 
+          trackCacheRef.current[song.id] = 'fetching'; // Lock to prevent double download
           const res = await fetch(SERVER + song.streamUrl);
           const arrayBuffer = await res.arrayBuffer();
           const decoded = await actxRef.current.decodeAudioData(arrayBuffer);
-          trackCacheRef.current[song.id] = decoded; 
+          trackCacheRef.current[song.id] = decoded; // Save audio to RAM
         } catch(e) {
-          delete trackCacheRef.current[song.id]; 
+          delete trackCacheRef.current[song.id]; // Unlock if failed
         }
       }
     }
@@ -359,33 +380,36 @@ function App() {
 
   const guestLoadAndSync = async (url, playState, isNewJoiner = false, songId = null) => {
     stopAudio(); audioBufferRef.current = null;
-    setTrackReady(false); 
+    setTrackReady(false); // LOCK THE PLAYER
     if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Loading track...' });
     
     try {
+      // PHASE 2: Check RAM Cache First!
       if (songId && trackCacheRef.current[songId] && trackCacheRef.current[songId] !== 'fetching') {
-        audioBufferRef.current = trackCacheRef.current[songId]; 
-        setTrackReady(true); 
+        audioBufferRef.current = trackCacheRef.current[songId]; // INSTANT LOAD (0ms)
+        setTrackReady(true); // UNLOCK THE PLAYER
         applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       } else {
+        // FALLBACK: Network Fetch
         const res = await fetch(url);
         const arrayBuffer = await res.arrayBuffer();
         audioBufferRef.current = await actxRef.current.decodeAudioData(arrayBuffer);
-        if (songId) trackCacheRef.current[songId] = audioBufferRef.current; 
-        setTrackReady(true); 
+        if (songId) trackCacheRef.current[songId] = audioBufferRef.current; // Save for later
+        setTrackReady(true); // UNLOCK THE PLAYER
         applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       }
     } catch(e) { 
-      setTrackReady(true); 
+      setTrackReady(true); // Failsafe unlock
       if (!stateRef.current.amHost) setSyncState({ state: 'fixing', label: 'Error loading track' }); 
     }
   };
 
-  // ─── UPGRADED ABSOLUTE SCHEDULING ENGINE ───
-  const applyPlayState = (playing, currentTime, targetTs, isNewJoiner = false) => {
+  const applyPlayState = (playing, currentTime, ts, isNewJoiner = false) => {
     if (!audioBufferRef.current) return;
     
-    const outLat = stateRef.current.outLat || 0.050;
+    // RESTORED: Factor in the hardware output latency so music aligns in the physical air!
+    const outLat = stateRef.current.outLat || 0.060;
+    const elapsed = (Date.now() + stateRef.current.clockOff - ts) / 1000;
     
     if (!playing) { 
       stopAudio(); stateRef.current.songOffset = currentTime; 
@@ -393,42 +417,28 @@ function App() {
       return; 
     }
     
-    const nowServer = sNow();
-    const timeUntilStartMs = targetTs - nowServer;
+    // Notice the + outLat added here!
+    let expectedOffset = currentTime + elapsed + outLat;
+    let startTime = actxRef.current.currentTime + 0.05;
 
-    let actxStartTime;
-    let actualSongOffset = currentTime;
-
-    // Calculate EXACT physical start time based on the target timestamp
-    if (timeUntilStartMs > 0) {
-        actxStartTime = actxRef.current.currentTime + (timeUntilStartMs / 1000);
-    } else {
-        actxStartTime = actxRef.current.currentTime + 0.050; // Buffer to prevent clicks
-        actualSongOffset = currentTime + Math.abs(timeUntilStartMs / 1000) + 0.050;
-    }
-
-    // Apply specific hardware/Bluetooth latency compensation
-    actualSongOffset += outLat;
-
-    if (actualSongOffset >= audioBufferRef.current.duration) { stopAudio(); return; }
-
-    if (isNewJoiner && !stateRef.current.amHost && (timeUntilStartMs < -1000)) {
-        // If joining very late, schedule a tiny bit ahead to lock cleanly
-        const delay = 1.0; actualSongOffset += delay; actxStartTime = actxRef.current.currentTime + delay; 
-        setSyncState({ state: 'syncing', label: 'Locking sync...' });
+    if (expectedOffset < 0) { startTime = actxRef.current.currentTime + Math.abs(expectedOffset); expectedOffset = 0; }
+    
+    if (isNewJoiner && !stateRef.current.amHost && expectedOffset > 0) {
+        const delay = 3.0; expectedOffset += delay; startTime = actxRef.current.currentTime + delay; 
+        setSyncState({ state: 'syncing', label: 'Locking sync... playing in 3s' });
         setTimeout(() => { if(stateRef.current.localPlayState) setSyncState({ state: 'synced', label: 'Locked Sync' }); }, delay * 1000);
     } else {
         if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Locked Sync' });
     }
 
-    playAudioAt(actualSongOffset, actxStartTime);
+    if (expectedOffset >= audioBufferRef.current.duration) { stopAudio(); return; }
+    playAudioAt(expectedOffset, startTime);
   };
 
   const handleSeek = (newTime) => {
     if (!amHost || !audioBufferRef.current) return;
-    const targetTs = sNow() + 200; // Give network 200ms to broadcast seek
-    socketRef.current.emit('schedule-play', { currentTime: newTime, targetTs: targetTs });
-    applyPlayState(stateRef.current.localPlayState, newTime, targetTs, false);
+    socketRef.current.emit('playstate', { playing: stateRef.current.localPlayState, currentTime: newTime, ts: sNow() });
+    applyPlayState(stateRef.current.localPlayState, newTime, sNow(), false);
   };
 
   const drawVisualizer = () => {
@@ -456,6 +466,7 @@ function App() {
     if (tCurRef.current) tCurRef.current.textContent = fmt(currentPos);
   };
 
+  // --- ORBIT MODE: DYNAMIC MATH & AUDIO ENGINE ---
   useEffect(() => {
     const runOrbitUI = () => {
       if (roomTab !== 'orbit') return;
@@ -465,6 +476,7 @@ function App() {
       const W = cvs.width = cvs.offsetWidth; const H = cvs.height = cvs.offsetHeight;
       const cx = W/2, cy = H/2; const radius = Math.min(W, H) * 0.35;
       
+      // FIX 5: Dynamic Global Time Radar
       const total = stateRef.current.members.length || 1;
       const speedMs = Math.max(3000, Math.min(10000, 2000 * total)); 
       const globalTime = Date.now() + stateRef.current.clockOff;
@@ -526,6 +538,7 @@ function App() {
       let diff = Math.abs(radarAngle - myAngle);
       if (diff > Math.PI) diff = Math.PI * 2 - diff;
       
+      // FIX 6: Direct Volume Assignment prevents Safari bugs
       const vol = 0.2 + 0.8 * Math.max(0, Math.cos(diff));
       gainNodeRef.current.gain.value = vol * stateRef.current.globalVolume;
       
@@ -536,6 +549,76 @@ function App() {
     updateAudioOrbit();
     return () => cancelAnimationFrame(audioOrbitRaf.current);
   }, []);
+  // ----------------------------------------
+
+  const runSonarCalibration = async () => {
+    // Ensure AudioContext is running
+    if (!actxRef.current) return toast("Audio not initialized. Play a track first.", "err");
+    toast("Calibrating... Keep the room quiet!", "inf");
+
+    try {
+      // 1. Request RAW microphone access (bypass Apple/Google echo cancellation)
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } 
+      });
+      
+      const micSource = actxRef.current.createMediaStreamSource(stream);
+      const micAnalyser = actxRef.current.createAnalyser();
+      micSource.connect(micAnalyser);
+
+      const bufferLength = micAnalyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      const startTime = performance.now();
+      
+      // 2. Fire the Acoustic Transient (The Sonar Ping)
+      const osc = actxRef.current.createOscillator();
+      const clickGain = actxRef.current.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1200, actxRef.current.currentTime);
+      
+      // Sharp attack and decay to create a "click" not a "beep"
+      clickGain.gain.setValueAtTime(0, actxRef.current.currentTime);
+      clickGain.gain.linearRampToValueAtTime(1, actxRef.current.currentTime + 0.002);
+      clickGain.gain.linearRampToValueAtTime(0, actxRef.current.currentTime + 0.010);
+      
+      osc.connect(clickGain);
+      clickGain.connect(actxRef.current.destination);
+      osc.start();
+      osc.stop(actxRef.current.currentTime + 0.02);
+
+      // 3. Listen for the Sound Spike in the Air
+      const checkMic = () => {
+        micAnalyser.getByteFrequencyData(dataArray);
+        let volume = 0;
+        for (let i = 0; i < bufferLength; i++) if (dataArray[i] > volume) volume = dataArray[i];
+
+        if (volume > 180) { // Threshold for a clear click detection
+          const endTime = performance.now();
+          const latencySec = (endTime - startTime) / 1000;
+          
+          // 4. Inject precisely into your sync engine (cap between 10ms and 600ms)
+          stateRef.current.outLat = Math.max(0.010, Math.min(0.600, latencySec));
+          toast(`Sync Locked: ${(latencySec * 1000).toFixed(0)}ms latency detected`, "ok");
+          
+          // Kill the mic to save battery and prevent feedback
+          stream.getTracks().forEach(t => t.stop());
+        } else if (performance.now() - startTime < 2000) {
+          // Keep listening for up to 2 seconds
+          requestAnimationFrame(checkMic);
+        } else {
+          toast("Calibration failed. Turn up the volume and try again.", "err");
+          stream.getTracks().forEach(t => t.stop());
+        }
+      };
+      
+      // Start the listening loop
+      checkMic();
+
+    } catch (err) {
+      console.error("Mic Error:", err);
+      toast("Microphone access is required for Sonar Calibration.", "err");
+    }
+  };
 
   const setupSocketListeners = (sock) => {
     sock.on('song-changed', ({ songId, name, streamUrl, playState }) => {
@@ -556,7 +639,7 @@ function App() {
     sock.on('heartbeat', ({ currentTime, ts }) => {
       if (stateRef.current.amHost || !stateRef.current.localPlayState || !audioBufferRef.current) return;
       
-      const outLat = stateRef.current.outLat || 0.050;
+      const outLat = stateRef.current.outLat || 0.060;
       const elapsed = (sNow() - ts) / 1000;
       const expectedTime = currentTime + elapsed + outLat;
       const actualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
@@ -564,15 +647,24 @@ function App() {
       const drift = expectedTime - actualTime;
       const absDrift = Math.abs(drift);
 
-      // STRICT CONSTANT MONITORING: No pitch bending to distort audio
-      if (absDrift > 0.080) { // If audio drifts > 80ms, force an immediate absolute recalculation
-          applyPlayState(true, currentTime + elapsed, sNow(), false);
+      // 1. Hard seek if drift > 150ms (Prevents stadium echo)
+      if (absDrift > 0.150) {
+          applyPlayState(true, currentTime, ts, false);
       } 
+      // 2. Micro-adjust only if drift > 30ms. Cap at 0.4% speed change (Acoustically Invisible!)
+      else if (absDrift > 0.030 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          const correction = Math.min(0.004, absDrift * 0.1);
+          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.0 + correction : 1.0 - correction;
+      } 
+      // 3. Perfect play state
+      else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          sourceNodeRef.current.playbackRate.value = 1.0;
+      }
     });
 
     sock.on('queue-updated', ({ queue }) => { 
       setQueue(queue);
-      prefetchQueue(queue); 
+      prefetchQueue(queue); // Phase 2: Start background downloading
     });
     
     sock.on('chat-msg', ({ name, text }) => { 
@@ -637,6 +729,7 @@ function App() {
       socketRef.current.emit('join-room', { code: codeInput, name: uname, claimHost: false }, (res) => {
         if (res.error) { setIsSyncing(false); return toast(res.error, 'err'); }
         
+        // FIX: Capacity Limit Check on Manual Join
         if (res.members && res.members.length > 15) {
              setIsSyncing(false);
              socketRef.current.disconnect(); socketRef.current = null;
@@ -665,15 +758,8 @@ function App() {
     if (!amHost) return;
     const s = stateRef.current;
     let cur = s.localPlayState ? s.songOffset + (actxRef.current.currentTime - s.nodeStartTime) : s.songOffset;
-    if (!s.localPlayState) { 
-      const targetTs = sNow() + 500; // Network Buffer - Schedule exactly 500ms in the future
-      socketRef.current.emit('schedule-play', { currentTime: cur, targetTs: targetTs }); 
-      applyPlayState(true, cur, targetTs, false);
-    }
-    else { 
-      socketRef.current.emit('playstate', { playing: false, currentTime: cur, ts: sNow() }); 
-      applyPlayState(false, cur, sNow(), false); 
-    }
+    if (!s.localPlayState) { socketRef.current.emit('schedule-play', { currentTime: cur }); }
+    else { socketRef.current.emit('playstate', { playing: false, currentTime: cur, ts: sNow() }); applyPlayState(false, cur, sNow(), false); }
   };
 
   const seekClick = (e) => {
@@ -738,6 +824,7 @@ function App() {
       <canvas id="bgc"></canvas>
       <div className={`toast ${toastData.visible ? 'on' : ''} ${toastData.type}`}>{toastData.msg}</div>
       
+      {/* ── THE GLOBAL NEON LOADER ── */}
       {isSyncing && (
         <div className="loader-overlay">
           <div className="eq-container">
@@ -747,6 +834,7 @@ function App() {
         </div>
       )}
 
+      {/* ── VIEWS WRAPPED IN !isSyncing ── */}
       {view === 'marketing' && !isSyncing && (
         <div className="scr on" id="landing" style={{ display: 'block' }}>
           
@@ -763,6 +851,7 @@ function App() {
           </nav>
 
           <div className="wrap">
+            {/* ══ HERO ══ */}
             <section className="hero">
               <div className="hero-eyebrow"><span></span> Live · Synchronized · Private</div>
               <h1 className="hero-title"><span className="line1">HEAR</span><span className="line2">TOGETHER</span></h1>
@@ -806,6 +895,7 @@ function App() {
               </div>
             </section>
 
+            {/* ══ HOW IT WORKS ══ */}
             <section id="how">
               <div style={{ maxWidth: '1100px', margin: '0 auto', textAlign: 'center' }}>
                 <div className="section-label">⚡ Three Steps</div>
@@ -820,6 +910,7 @@ function App() {
               </div>
             </section>
 
+            {/* ══ FEATURES ══ */}
             <section id="features" style={{ background: 'linear-gradient(180deg,var(--bg),var(--s1) 50%,var(--bg))' }}>
               <div style={{ maxWidth: '1100px', margin: '0 auto', textAlign: 'center' }}>
                 <div className="section-label">✨ Everything Included</div>
@@ -842,6 +933,7 @@ function App() {
               </div>
             </section>
 
+            {/* ══ USE CASES ══ */}
             <section id="usecases">
               <div style={{ maxWidth: '1100px', margin: '0 auto', textAlign: 'center' }}>
                 <div className="section-label">🌍 Use Cases</div>
@@ -858,6 +950,7 @@ function App() {
               </div>
             </section>
 
+            {/* ══ TECH ══ */}
             <section id="tech" style={{ background: 'linear-gradient(180deg,var(--bg),var(--s1) 40%,var(--bg))' }}>
               <div className="tech-inner">
                 <div className="reveal">
@@ -896,16 +989,35 @@ function App() {
                   </div>
                 </div>
                 <div className="tech-stats reveal" style={{ transitionDelay: '.15s' }}>
-                  <div className="stat-box"><div className="stat-val">&lt;100<span className="stat-unit">ms</span></div><div className="stat-label">Sync precision</div></div>
-                  <div className="stat-box"><div className="stat-val">500<span className="stat-unit">ms</span></div><div className="stat-label">Heartbeat interval</div></div>
-                  <div className="stat-box"><div className="stat-val">150<span className="stat-unit">MB</span></div><div className="stat-label">Max file size</div></div>
-                  <div className="stat-box"><div className="stat-val">10<span className="stat-unit"> songs</span></div><div className="stat-label">Batch upload</div></div>
-                  <div className="stat-box"><div className="stat-val">8<span className="stat-unit">x</span></div><div className="stat-label">Clock sync samples</div></div>
-                  <div className="stat-box"><div className="stat-val">0<span className="stat-unit">MB</span></div><div className="stat-label">Data retained</div></div>
+                  <div className="stat-box">
+                    <div className="stat-val">&lt;100<span className="stat-unit">ms</span></div>
+                    <div className="stat-label">Sync precision</div>
+                  </div>
+                  <div className="stat-box">
+                    <div className="stat-val">500<span className="stat-unit">ms</span></div>
+                    <div className="stat-label">Heartbeat interval</div>
+                  </div>
+                  <div className="stat-box">
+                    <div className="stat-val">150<span className="stat-unit">MB</span></div>
+                    <div className="stat-label">Max file size</div>
+                  </div>
+                  <div className="stat-box">
+                    <div className="stat-val">10<span className="stat-unit"> songs</span></div>
+                    <div className="stat-label">Batch upload</div>
+                  </div>
+                  <div className="stat-box">
+                    <div className="stat-val">8<span className="stat-unit">x</span></div>
+                    <div className="stat-label">Clock sync samples</div>
+                  </div>
+                  <div className="stat-box">
+                    <div className="stat-val">0<span className="stat-unit">MB</span></div>
+                    <div className="stat-label">Data retained</div>
+                  </div>
                 </div>
               </div>
             </section>
 
+            {/* ══ FAQ ══ */}
             <section id="faq" style={{ padding: '100px 24px' }}>
               <div style={{ maxWidth: '760px', margin: '0 auto', textAlign: 'center' }}>
                 <div className="section-label">❓ FAQ</div>
@@ -929,6 +1041,7 @@ function App() {
               </div>
             </section>
 
+            {/* ══ CTA ══ */}
             <section id="cta">
               <div className="cta-glow"></div>
               <div className="reveal" style={{ position: 'relative' }}>
@@ -939,6 +1052,7 @@ function App() {
               </div>
             </section>
 
+            {/* ══ FOOTER ══ */}
             <footer>
               <div className="footer-inner">
                 <div className="footer-top">
@@ -994,6 +1108,8 @@ function App() {
         </div>
       )}
 
+      {/* ── THE RESTORED ROOM VIEW (WITH NEON LOADER & BLUETOOTH NOTE) ── */}
+      {/* ── THE COMPLETE ROOM VIEW (ALL 5 TABS RESTORED) ── */}
       {view === 'room' && !isSyncing && (
         <div id="room" className="scr on" style={{ display: 'flex' }}>
           <div className="rhead">
@@ -1012,6 +1128,8 @@ function App() {
           </div>
 
           <div className="rbody">
+            
+            {/* --- UPDATED NAVIGATION WITH ALL 5 TABS --- */}
             <div style={{display: 'flex', gap: '6px', marginBottom: '10px', background: 'var(--s1)', padding: '6px', borderRadius: '12px', border: '1px solid var(--border)', overflowX: 'auto', whiteSpace: 'nowrap'}}>
               <button onClick={() => setRoomTab('dj')} style={{flex: 1, padding: '10px 8px', background: roomTab === 'dj' ? 'var(--s2)' : 'transparent', color: roomTab === 'dj' ? 'var(--cyan)' : 'var(--sub)', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '13px'}}>DJ Desk</button>
               <button onClick={() => setRoomTab('members')} style={{flex: 1, padding: '10px 8px', background: roomTab === 'members' ? 'var(--s2)' : 'transparent', color: roomTab === 'members' ? 'var(--text)' : 'var(--sub)', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '13px'}}>Listeners</button>
@@ -1020,6 +1138,7 @@ function App() {
               <button onClick={() => setRoomTab('orbit')} style={{flex: 1, padding: '10px 8px', background: roomTab === 'orbit' ? 'var(--s2)' : 'transparent', color: roomTab === 'orbit' ? 'var(--pink)' : 'var(--sub)', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '13px'}}>Labs 🧪</button>
             </div>
 
+            {/* --- DJ TAB --- */}
             <div style={{ display: roomTab === 'dj' ? 'block' : 'none' }}>
               <div style={{
                 background: 'rgba(247,37,133,0.05)', 
@@ -1036,7 +1155,7 @@ function App() {
                 <span style={{fontSize: '16px'}}>🔊</span>
                 <div style={{flex: 1, lineHeight: '1.4'}}>
                   <strong style={{color: 'var(--text)'}}>Using a Bluetooth speaker?</strong><br/>
-                  Bluetooth creates an audio echo. Go to the <span onClick={() => setRoomTab('orbit')} style={{color: 'var(--pink)', cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline'}}>Labs 🧪 tab</span> to perfectly sync this device.
+                  Bluetooth creates an audio echo. Go to the <span onClick={() => setRoomTab('orbit')} style={{color: 'var(--pink)', cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline'}}>Labs 🧪 tab</span> to calibrate this specific device.
                 </div>
               </div>
 
@@ -1110,6 +1229,7 @@ function App() {
               </div>
             </div>
 
+            {/* --- LISTENERS TAB --- */}
             <div style={{ display: roomTab === 'members' ? 'block' : 'none' }}>
               <div className="card">
                 <div className="card-label">Listeners ({members.length})</div>
@@ -1136,6 +1256,7 @@ function App() {
               </div>
             </div>
 
+            {/* --- CHAT TAB --- */}
             <div style={{ display: roomTab === 'chat' ? 'block' : 'none' }}>
               <div className="card">
                 <div className="card-label">Room Chat</div>
@@ -1154,9 +1275,11 @@ function App() {
               </div>
             </div>
 
+            {/* --- SETTINGS TAB --- */}
             <div style={{ display: roomTab === 'settings' ? 'block' : 'none' }}>
               <div className="card">
                 <div className="card-label">Room Settings</div>
+                
                 <div style={{background:'var(--s2)', padding:'16px', borderRadius:'12px', border:'1px solid var(--border)', marginBottom:'12px'}}>
                   <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px'}}>
                     <div>
@@ -1182,30 +1305,21 @@ function App() {
               </div>
             </div>
 
+            {/* --- LABS / ORBIT TAB --- */}
             <div style={{ display: roomTab === 'orbit' ? 'block' : 'none' }}>
               <div className="card" style={{padding: '10px'}}>
                 <div style={{marginBottom: '15px', padding: '5px 10px'}}>
                   <div style={{fontSize: '18px', fontWeight: '800', color: 'var(--pink)', letterSpacing: '-0.5px'}}>HushPod Labs</div>
-                  <div style={{fontSize: '12px', color: 'var(--sub)', marginTop: '2px'}}>Manual Device Calibration</div>
+                  <div style={{fontSize: '12px', color: 'var(--sub)', marginTop: '2px'}}>Phase 1: Acoustic Hardware Calibration</div>
                 </div>
 
                 <div style={{background: 'var(--s2)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border)', marginBottom: '15px', textAlign: 'center'}}>
-                  <div style={{fontSize: '12px', color: 'var(--sub)', marginBottom: '15px', textTransform: 'uppercase'}}>Hardware Sync Offset</div>
-                  
-                  <div style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '20px', marginBottom: '15px'}}>
-                    <button className="btn-ghost" style={{width: '50px', height: '50px', fontSize: '24px', padding: 0, borderRadius: '12px', margin: 0}} onClick={() => { stateRef.current.outLat = Math.max(0, (stateRef.current.outLat || 0.05) - 0.01); setQueue(q => [...q]); }}>-</button>
-                    
-                    <div style={{fontSize: '36px', fontWeight: '900', fontFamily: 'monospace', color: 'var(--cyan)', width: '100px'}}>
-                      {Math.round((stateRef.current.outLat || 0.05) * 1000)}<span style={{fontSize: '16px', color: 'var(--sub)', marginLeft: '4px'}}>ms</span>
-                    </div>
-
-                    <button className="btn-ghost" style={{width: '50px', height: '50px', fontSize: '24px', padding: 0, borderRadius: '12px', margin: 0}} onClick={() => { stateRef.current.outLat = (stateRef.current.outLat || 0.05) + 0.01; setQueue(q => [...q]); }}>+</button>
+                  <div style={{fontSize: '12px', color: 'var(--sub)', marginBottom: '8px', textTransform: 'uppercase'}}>Local Device Latency</div>
+                  <div style={{fontSize: '36px', fontWeight: '900', fontFamily: 'monospace', color: 'var(--cyan)', marginBottom: '10px'}}>
+                    {stateRef.current.outLat ? (stateRef.current.outLat * 1000).toFixed(0) : 0}<span style={{fontSize: '16px', color: 'var(--sub)', marginLeft: '4px'}}>ms</span>
                   </div>
-                  
-                  <p style={{fontSize: '11px', color: 'var(--sub)', marginTop: '10px', lineHeight: '1.4'}}>
-                    <strong style={{color: 'var(--pink)'}}>Echoing?</strong> Nudge this value until the echo vanishes. Normal phones = 50ms. Bluetooth = 200ms+.<br/>
-                    The engine is locked into <strong>Constant Strict Monitoring</strong>.
-                  </p>
+                  <button className="btn btn-cyan" style={{width: '100%', maxWidth: '200px', margin: '10px auto', padding: '12px', fontSize: '14px', fontWeight: '700', borderRadius: '8px'}} onClick={() => runSonarCalibration()}>🔊 Run Sonar Ping</button>
+                  <p style={{fontSize: '11px', color: 'var(--sub)', marginTop: '10px', lineHeight: '1.4'}}>Only run this on the specific device connected to the Bluetooth speaker. Hold the speaker near the microphone to measure the air delay.</p>
                 </div>
 
                 <div style={{width: '100%', height: '200px', background: '#05050a', borderRadius: '12px', position: 'relative', overflow: 'hidden', border: '1px solid var(--border)'}}>
