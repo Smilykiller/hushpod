@@ -252,7 +252,31 @@ function App() {
       window.removeEventListener('scroll', handleScroll);
     };
   }, [view]);
+  // --- CONTINUOUS TIMING & SYNC ENGINE ---
+  useEffect(() => {
+    if (view !== 'room') return;
 
+    // 1. Host continuously broadcasts exact audio position every 1 second
+    const heartbeatInterval = setInterval(() => {
+      const s = stateRef.current;
+      if (s.localPlayState && socketRef.current && s.amHost) {
+        socketRef.current.emit('heartbeat', { 
+          currentTime: Math.max(0, s.songOffset + (actxRef.current.currentTime - s.nodeStartTime)) 
+        });
+      }
+    }, 1000);
+
+    // 2. ALL devices constantly resync their physical clocks with the server every 20 seconds
+    const clockSyncInterval = setInterval(() => {
+      syncClock();
+    }, 20000);
+
+    return () => {
+      clearInterval(heartbeatInterval);
+      clearInterval(clockSyncInterval);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
   const initSystem = async () => {
     if (!actxRef.current) {
       actxRef.current = new (window.AudioContext || window.webkitAudioContext)();
@@ -1322,11 +1346,32 @@ function App() {
                   <p style={{fontSize: '11px', color: 'var(--sub)', marginTop: '10px', lineHeight: '1.4'}}>Only run this on the specific device connected to the Bluetooth speaker. Hold the speaker near the microphone to measure the air delay.</p>
                 </div>
 
-                <div style={{width: '100%', height: '200px', background: '#05050a', borderRadius: '12px', position: 'relative', overflow: 'hidden', border: '1px solid var(--border)'}}>
+               <div style={{width: '100%', height: '200px', background: '#05050a', borderRadius: '12px', position: 'relative', overflow: 'hidden', border: '1px solid var(--border)'}}>
                   <canvas id="orbit-canvas" style={{width: '100%', height: '100%', display: 'block'}}></canvas>
+                  
+                  {/* THE ORBIT ON/OFF BUTTON */}
                   <div style={{position: 'absolute', top: '10px', right: '10px', zIndex: 10}}>
-                     {amHost && (
-                        <button className={`btn-ghost ${orbitActive ? 'on' : ''}`} style={{fontSize: '10px', padding: '6px 10px', background: 'rgba(0,0,0,0.5)', width: 'auto'}} onClick={() => socketRef.current.emit('set-orbit', {active: !orbitActive})}>{orbitActive ? 'Orbit: LIVE' : 'Orbit: OFF'}</button>
+                     {amHost ? (
+                        <button 
+                          className="btn-ghost" 
+                          style={{
+                            fontSize: '11px', padding: '6px 12px', width: 'auto', borderRadius: '6px', fontWeight: 'bold', margin: 0,
+                            background: orbitActive ? 'rgba(247,37,133,0.15)' : 'rgba(0,0,0,0.6)', 
+                            border: orbitActive ? '1px solid var(--pink)' : '1px solid var(--border)', 
+                            color: orbitActive ? 'var(--pink)' : 'var(--text)', 
+                          }} 
+                          onClick={() => socketRef.current.emit('set-orbit', {active: !orbitActive})}
+                        >
+                          {orbitActive ? 'Orbit: LIVE' : 'Orbit: OFF'}
+                        </button>
+                     ) : (
+                        <div style={{
+                          fontSize: '10px', padding: '6px 10px', background: 'rgba(0,0,0,0.6)', 
+                          border: '1px solid var(--border)', borderRadius: '6px', 
+                          color: orbitActive ? 'var(--pink)' : 'var(--sub)', fontWeight: 'bold'
+                        }}>
+                          {orbitActive ? 'Orbit: LIVE' : 'Orbit: OFF'}
+                        </div>
                      )}
                   </div>
                 </div>
