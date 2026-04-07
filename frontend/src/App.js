@@ -663,7 +663,7 @@ function App() {
     sock.on('heartbeat', ({ currentTime, ts }) => {
       if (stateRef.current.amHost || !stateRef.current.localPlayState || !audioBufferRef.current) return;
       
-      const outLat = stateRef.current.outLat || 0.060;
+      const outLat = stateRef.current.outLat || 0.050;
       const elapsed = (sNow() - ts) / 1000;
       const expectedTime = currentTime + elapsed + outLat;
       const actualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
@@ -671,18 +671,21 @@ function App() {
       const drift = expectedTime - actualTime;
       const absDrift = Math.abs(drift);
 
-      // 1. Hard seek if drift > 150ms (Prevents stadium echo)
-      if (absDrift > 0.150) {
-          applyPlayState(true, currentTime, ts, false);
+      // --- THE 3-TIERED SMOOTH SYNC ENGINE ---
+
+      // TIER 1: Catastrophic Lag (> 60ms) - Snap it instantly
+      if (absDrift > 0.060) {
+          applyPlayState(true, currentTime + elapsed, sNow(), false);
       } 
-      // 2. Micro-adjust only if drift > 30ms. Cap at 0.4% speed change (Acoustically Invisible!)
-      else if (absDrift > 0.030 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          const correction = Math.min(0.004, absDrift * 0.1);
-          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.0 + correction : 1.0 - correction;
-      } 
-      // 3. Perfect play state
+      // TIER 2: The Haas Deadzone (< 20ms) - PERFECT SYNC. Do absolutely nothing.
+      else if (absDrift < 0.020 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          sourceNodeRef.current.playbackRate.value = 1.0; 
+      }
+      // TIER 3: The Invisible Nudge (20ms to 60ms) - Microscopic 0.2% speed adjustment
       else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          sourceNodeRef.current.playbackRate.value = 1.0;
+          // 1.002 speeds it up slightly, 0.998 slows it down slightly. 
+          // Acoustically invisible to the human ear.
+          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.002 : 0.998;
       }
     });
 
