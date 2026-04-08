@@ -253,27 +253,48 @@ function App() {
     };
   }, [view]);
   // --- CONTINUOUS TIMING & SYNC ENGINE ---
+  // --- BACKGROUND-RESILIENT TIMING ENGINE (SCREEN OFF FIX) ---
   useEffect(() => {
     if (view !== 'room') return;
 
-    // 1. Host continuously broadcasts exact audio position every 1 second
-    const heartbeatInterval = setInterval(() => {
-      const s = stateRef.current;
-      if (s.localPlayState && socketRef.current && s.amHost) {
-        socketRef.current.emit('heartbeat', { 
-          currentTime: Math.max(0, s.songOffset + (actxRef.current.currentTime - s.nodeStartTime)) 
-        });
-      }
-    }, 1000);
+    // Mobile browsers throttle standard setInterval when the screen is off.
+    // We use an inline Web Worker as a background metronome so the Host never stops broadcasting,
+    // and Guests never stop checking the clock.
+    const workerBlob = new Blob([`
+      let tick1, tick2;
+      self.onmessage = function(e) {
+        if (e.data === 'start') {
+          // Heartbeat every 1 second, Clock Sync every 20 seconds
+          tick1 = setInterval(() => self.postMessage('heartbeat'), 1000);
+          tick2 = setInterval(() => self.postMessage('clocksync'), 20000);
+        } else if (e.data === 'stop') {
+          clearInterval(tick1);
+          clearInterval(tick2);
+        }
+      };
+    `], { type: 'application/javascript' });
 
-    // 2. ALL devices constantly resync their physical clocks with the server every 20 seconds
-    const clockSyncInterval = setInterval(() => {
-      syncClock();
-    }, 20000);
+    const worker = new Worker(URL.createObjectURL(workerBlob));
+
+    // The Worker sends un-throttled "ticks" to the main thread
+    worker.onmessage = (e) => {
+      if (e.data === 'heartbeat') {
+        const s = stateRef.current;
+        if (s.localPlayState && socketRef.current && s.amHost) {
+          socketRef.current.emit('heartbeat', { 
+            currentTime: Math.max(0, s.songOffset + (actxRef.current.currentTime - s.nodeStartTime)) 
+          });
+        }
+      } else if (e.data === 'clocksync') {
+        syncClock();
+      }
+    };
+
+    worker.postMessage('start');
 
     return () => {
-      clearInterval(heartbeatInterval);
-      clearInterval(clockSyncInterval);
+      worker.postMessage('stop');
+      worker.terminate();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
@@ -406,13 +427,13 @@ function App() {
     stopAudio(); 
     
     try {
-      // 1. SMART CACHE CHECK: If it's already in RAM, load it instantly with NO loader flash!
+      // 1. SMART CACHE: If already in RAM, load instantly with NO loader flash!
       if (songId && trackCacheRef.current[songId] && trackCacheRef.current[songId] !== 'fetching') {
         audioBufferRef.current = trackCacheRef.current[songId]; 
         setTrackReady(true); 
         applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       } else {
-        // 2. ONLY show the decoding loader if we actually have to download it from scratch
+        // 2. NETWORK FETCH: Only show decoding screen if downloading from scratch
         audioBufferRef.current = null;
         setTrackReady(false); 
         if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Loading track...' });
@@ -423,6 +444,8 @@ function App() {
         
         if (songId) trackCacheRef.current[songId] = audioBufferRef.current; 
         setTrackReady(true); 
+        
+        // Apply play state. If we took too long and missed a toggle, the new Heartbeat engine above will auto-fix it in 1 second!
         applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       }
     } catch(e) { 
@@ -664,30 +687,35 @@ function App() {
     });
 
     sock.on('heartbeat', ({ currentTime, ts }) => {
-      if (stateRef.current.amHost || !stateRef.current.localPlayState || !audioBufferRef.current) return;
+      // 1. Ignore if I am the Host, or if my audio hasn't finished loading yet
+      if (stateRef.current.amHost || !audioBufferRef.current) return;
       
       const outLat = stateRef.current.outLat || 0.050;
-      const elapsed = (sNow() - ts) / 1000;
-      const expectedTime = currentTime + elapsed + outLat;
-      const actualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
+      const networkDelay = (sNow() - ts) / 1000;
+      const trueHostTime = currentTime + networkDelay;
+
+      // 2. DECODING/CRASH CATCH-UP: If Host is playing, but I am paused (because I decoded too slowly and missed the Play command), FORCE START!
+      if (!stateRef.current.localPlayState) {
+          applyPlayState(true, trueHostTime, sNow(), false);
+          return;
+      }
       
-      const drift = expectedTime - actualTime;
+      // 3. I am playing. Calculate my drift from the Host's absolute time.
+      const actualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
+      const drift = trueHostTime - actualTime;
       const absDrift = Math.abs(drift);
 
-      // --- THE 3-TIERED SMOOTH SYNC ENGINE ---
-
-      if (absDrift > 0.080) {
-          // TIER 1: Catastrophic Lag (> 80ms) - Snap it instantly to fix the stadium echo
-          applyPlayState(true, currentTime + elapsed, sNow(), false);
+      // 4. SCREEN OFF RECOVERY: If off by more than 150ms, hard snap to Host
+      if (absDrift > 0.150) {
+          applyPlayState(true, trueHostTime, sNow(), false);
       } 
-      else if (absDrift < 0.020 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          // TIER 2: The Haas Deadzone (< 20ms) - PERFECT SYNC. Do absolutely nothing.
-          sourceNodeRef.current.playbackRate.value = 1.0; 
-      }
+      // 5. SMOOTH NUDGE: If off by 20ms - 150ms, gently slide speed by 1% to align smoothly
+      else if (absDrift > 0.020 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.01 : 0.99; 
+      } 
+      // 6. PERFECT SYNC: Deadzone (<20ms) - Play pure, original audio
       else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          // TIER 3: The Invisible Nudge (20ms to 80ms) - Microscopic 0.4% speed adjustment
-          // 1.004 speeds it up slightly, 0.996 slows it down slightly. Acoustically invisible.
-          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.004 : 0.996;
+          sourceNodeRef.current.playbackRate.value = 1.0;
       }
     });
 
@@ -1351,19 +1379,14 @@ function App() {
                   <p style={{fontSize: '11px', color: 'var(--sub)', marginTop: '10px', lineHeight: '1.4'}}>Only run this on the specific device connected to the Bluetooth speaker. Hold the speaker near the microphone to measure the air delay.</p>
                 </div>
 
-               <div style={{width: '100%', height: '200px', background: '#05050a', borderRadius: '12px', position: 'relative', overflow: 'hidden', border: '1px solid var(--border)'}}>
-                  <canvas id="orbit-canvas" style={{width: '100%', height: '100%', display: 'block'}}></canvas>
-                  
-                  {/* THE ORBIT ON/OFF BUTTON */}
-                  <div style={{position: 'absolute', top: '10px', right: '10px', zIndex: 10}}>
+               <div style={{position: 'absolute', top: '10px', right: '10px', zIndex: 10}}>
                      {amHost ? (
                         <button 
-                          className="btn-ghost" 
                           style={{
-                            fontSize: '11px', padding: '6px 12px', width: 'auto', borderRadius: '6px', fontWeight: 'bold', margin: 0,
-                            background: orbitActive ? 'rgba(247,37,133,0.15)' : 'rgba(0,0,0,0.6)', 
-                            border: orbitActive ? '1px solid var(--pink)' : '1px solid var(--border)', 
-                            color: orbitActive ? 'var(--pink)' : 'var(--text)', 
+                            fontSize: '11px', padding: '6px 12px', borderRadius: '6px', fontWeight: 'bold', border: 'none', cursor: 'pointer',
+                            background: orbitActive ? 'var(--pink)' : 'rgba(0,0,0,0.8)', 
+                            color: orbitActive ? '#fff' : 'var(--sub)', 
+                            boxShadow: orbitActive ? '0 0 15px rgba(247,37,133,0.5)' : 'none'
                           }} 
                           onClick={() => socketRef.current.emit('set-orbit', {active: !orbitActive})}
                         >
@@ -1371,15 +1394,13 @@ function App() {
                         </button>
                      ) : (
                         <div style={{
-                          fontSize: '10px', padding: '6px 10px', background: 'rgba(0,0,0,0.6)', 
-                          border: '1px solid var(--border)', borderRadius: '6px', 
-                          color: orbitActive ? 'var(--pink)' : 'var(--sub)', fontWeight: 'bold'
+                          fontSize: '10px', padding: '6px 10px', background: 'rgba(0,0,0,0.8)', 
+                          borderRadius: '6px', color: orbitActive ? 'var(--pink)' : 'var(--sub)', fontWeight: 'bold'
                         }}>
                           {orbitActive ? 'Orbit: LIVE' : 'Orbit: OFF'}
                         </div>
                      )}
                   </div>
-                </div>
               </div>
             </div>
 
