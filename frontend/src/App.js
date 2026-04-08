@@ -403,27 +403,30 @@ function App() {
   };
 
   const guestLoadAndSync = async (url, playState, isNewJoiner = false, songId = null) => {
-    stopAudio(); audioBufferRef.current = null;
-    setTrackReady(false); // LOCK THE PLAYER
-    if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Loading track...' });
+    stopAudio(); 
     
     try {
-      // PHASE 2: Check RAM Cache First!
+      // 1. SMART CACHE CHECK: If it's already in RAM, load it instantly with NO loader flash!
       if (songId && trackCacheRef.current[songId] && trackCacheRef.current[songId] !== 'fetching') {
-        audioBufferRef.current = trackCacheRef.current[songId]; // INSTANT LOAD (0ms)
-        setTrackReady(true); // UNLOCK THE PLAYER
+        audioBufferRef.current = trackCacheRef.current[songId]; 
+        setTrackReady(true); 
         applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       } else {
-        // FALLBACK: Network Fetch
+        // 2. ONLY show the decoding loader if we actually have to download it from scratch
+        audioBufferRef.current = null;
+        setTrackReady(false); 
+        if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Loading track...' });
+        
         const res = await fetch(url);
         const arrayBuffer = await res.arrayBuffer();
         audioBufferRef.current = await actxRef.current.decodeAudioData(arrayBuffer);
-        if (songId) trackCacheRef.current[songId] = audioBufferRef.current; // Save for later
-        setTrackReady(true); // UNLOCK THE PLAYER
+        
+        if (songId) trackCacheRef.current[songId] = audioBufferRef.current; 
+        setTrackReady(true); 
         applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       }
     } catch(e) { 
-      setTrackReady(true); // Failsafe unlock
+      setTrackReady(true); 
       if (!stateRef.current.amHost) setSyncState({ state: 'fixing', label: 'Error loading track' }); 
     }
   };
@@ -673,19 +676,18 @@ function App() {
 
       // --- THE 3-TIERED SMOOTH SYNC ENGINE ---
 
-      // TIER 1: Catastrophic Lag (> 60ms) - Snap it instantly
-      if (absDrift > 0.060) {
+      if (absDrift > 0.080) {
+          // TIER 1: Catastrophic Lag (> 80ms) - Snap it instantly to fix the stadium echo
           applyPlayState(true, currentTime + elapsed, sNow(), false);
       } 
-      // TIER 2: The Haas Deadzone (< 20ms) - PERFECT SYNC. Do absolutely nothing.
       else if (absDrift < 0.020 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          // TIER 2: The Haas Deadzone (< 20ms) - PERFECT SYNC. Do absolutely nothing.
           sourceNodeRef.current.playbackRate.value = 1.0; 
       }
-      // TIER 3: The Invisible Nudge (20ms to 60ms) - Microscopic 0.2% speed adjustment
       else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          // 1.002 speeds it up slightly, 0.998 slows it down slightly. 
-          // Acoustically invisible to the human ear.
-          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.002 : 0.998;
+          // TIER 3: The Invisible Nudge (20ms to 80ms) - Microscopic 0.4% speed adjustment
+          // 1.004 speeds it up slightly, 0.996 slows it down slightly. Acoustically invisible.
+          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.004 : 0.996;
       }
     });
 
