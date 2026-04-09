@@ -408,16 +408,20 @@ function App() {
 
   const prefetchQueue = async (q) => {
     if (!actxRef.current) return;
-    for (const song of q) {
+    
+    // FIX: Only pre-decode the NEXT 2 songs. Decoding 10 songs at once crashes mobile CPUs.
+    const upNext = q.slice(0, 2); 
+    
+    for (const song of upNext) {
       if (!trackCacheRef.current[song.id]) {
         try {
-          trackCacheRef.current[song.id] = 'fetching'; // Lock to prevent double download
+          trackCacheRef.current[song.id] = 'fetching'; 
           const res = await fetch(SERVER + song.streamUrl);
           const arrayBuffer = await res.arrayBuffer();
           const decoded = await actxRef.current.decodeAudioData(arrayBuffer);
-          trackCacheRef.current[song.id] = decoded; // Save audio to RAM
+          trackCacheRef.current[song.id] = decoded; 
         } catch(e) {
-          delete trackCacheRef.current[song.id]; // Unlock if failed
+          delete trackCacheRef.current[song.id]; 
         }
       }
     }
@@ -427,17 +431,16 @@ function App() {
     stopAudio(); 
     
     try {
-      // 1. SMART CACHE: If already in RAM, load instantly with NO loader flash!
       if (songId && trackCacheRef.current[songId] && trackCacheRef.current[songId] !== 'fetching') {
         audioBufferRef.current = trackCacheRef.current[songId]; 
         setTrackReady(true); 
         applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       } else {
-        // 2. NETWORK FETCH: Only show decoding screen if downloading from scratch
-        audioBufferRef.current = null;
-        setTrackReady(false); 
-        if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Loading track...' });
+        // FIX: Don't freeze the UI for 4 seconds if we are just transitioning to the next song!
+        if (isNewJoiner) setTrackReady(false); 
+        if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Buffering next...' });
         
+        if (songId) trackCacheRef.current[songId] = 'fetching';
         const res = await fetch(url);
         const arrayBuffer = await res.arrayBuffer();
         audioBufferRef.current = await actxRef.current.decodeAudioData(arrayBuffer);
@@ -445,7 +448,6 @@ function App() {
         if (songId) trackCacheRef.current[songId] = audioBufferRef.current; 
         setTrackReady(true); 
         
-        // Apply play state. If we took too long and missed a toggle, the new Heartbeat engine above will auto-fix it in 1 second!
         applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       }
     } catch(e) { 
@@ -687,34 +689,42 @@ function App() {
     });
 
     sock.on('heartbeat', ({ currentTime, ts }) => {
-      // 1. Ignore if I am the Host, or if my audio hasn't finished loading yet
+      // Ignore if I am the Host, or if my audio hasn't finished loading
       if (stateRef.current.amHost || !audioBufferRef.current) return;
       
       const outLat = stateRef.current.outLat || 0.050;
       const networkDelay = (sNow() - ts) / 1000;
-      const trueHostTime = currentTime + networkDelay;
+      const trueHostTime = currentTime + networkDelay + outLat;
 
-      // 2. DECODING/CRASH CATCH-UP: If Host is playing, but I am paused (because I decoded too slowly and missed the Play command), FORCE START!
       if (!stateRef.current.localPlayState) {
           applyPlayState(true, trueHostTime, sNow(), false);
           return;
       }
       
-      // 3. I am playing. Calculate my drift from the Host's absolute time.
       const actualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
       const drift = trueHostTime - actualTime;
       const absDrift = Math.abs(drift);
 
-      // 4. SCREEN OFF RECOVERY: If off by more than 150ms, hard snap to Host
-      if (absDrift > 0.150) {
+      // --- THE MILLISECOND PERFECT "PHASE-LOCKED" ENGINE ---
+
+      if (absDrift > 0.250) {
+          // TIER 1: SNAP. If we are completely desynced (over 250ms), hard reset.
           applyPlayState(true, trueHostTime, sNow(), false);
       } 
-      // 5. SMOOTH NUDGE: If off by 20ms - 150ms, gently slide speed by 1% to align smoothly
-      else if (absDrift > 0.020 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.01 : 0.99; 
+      else if (absDrift > 0.010 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          // TIER 2: DYNAMIC GLIDE. (10ms to 250ms off)
+          // Calculate the exact speed needed to close the gap smoothly over 1 second.
+          let correction = drift * 0.5; 
+          
+          // Cap the speed change at 1% so the pitch shift is physically undetectable by human ears.
+          if (correction > 0.01) correction = 0.01;
+          if (correction < -0.01) correction = -0.01;
+
+          sourceNodeRef.current.playbackRate.value = 1.0 + correction;
       } 
-      // 6. PERFECT SYNC: Deadzone (<20ms) - Play pure, original audio
       else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          // TIER 3: ABSOLUTE PERFECTION. (Under 10ms)
+          // Lock speed dead-center at 1.0. Pure, original audio quality.
           sourceNodeRef.current.playbackRate.value = 1.0;
       }
     });
