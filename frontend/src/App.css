@@ -1,47 +1,9 @@
-.App {
-  text-align: center;
-}
-
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
-}
-
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
-  color: white;
-}
-
-.App-link {
-  color: #61dafb;
-}
-
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* --- NEON EQ LOADER --- */
 .loader-overlay {
   position: fixed;
   top: 0; left: 0; width: 100vw; height: 100vh;
-  background: #0f0f13; 
+  /* Use your app's native background color instead of a hardcoded black */
+  background: var(--bg, #06060f); 
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -58,10 +20,11 @@
 .eq-bar {
   width: 8px;
   height: 50px;
-  background: #00f0ff; 
+  /* Use your app's native cyan variable */
+  background: var(--cyan, #4cc9f0); 
   border-radius: 4px;
   animation: pulse 1.2s infinite ease-in-out;
-  box-shadow: 0 0 12px rgba(0, 240, 255, 0.6);
+  box-shadow: 0 0 12px rgba(76, 201, 240, 0.6);
 }
 
 .eq-bar:nth-child(1) { animation-delay: -1.2s; }
@@ -77,8 +40,8 @@
 
 .loader-text {
   margin-top: 20px;
-  color: #00f0ff;
-  font-family: monospace;
+  color: var(--cyan, #4cc9f0);
+  font-family: 'JetBrains Mono', monospace;
   letter-spacing: 2px;
   text-transform: uppercase;
   animation: fadeBlink 2s infinite;
