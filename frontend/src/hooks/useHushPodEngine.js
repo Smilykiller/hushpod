@@ -387,22 +387,43 @@ export default function useHushPodEngine() {
       if(!stateRef.current.amHost) applyPlayState(playing, currentTime, ts, false); 
     });
     sock.on('heartbeat', ({ currentTime, ts }) => {
-      if (stateRef.current.amHost || !audioBufferRef.current) return;
-      const outLat = stateRef.current.outLat || 0.050; 
-      const networkDelay = (sNow() - ts) / 1000;       
-      const trueHostTime = currentTime + networkDelay;
+      if (stateRef.current.amHost || !audioBufferRef.current || !stateRef.current.localPlayState) return;
 
-      if (!stateRef.current.localPlayState) { applyPlayState(true, trueHostTime + outLat, sNow(), false); return; }
+      const outLat = stateRef.current.outLat || 0.050; 
       
+      // Calculate how long the packet took to arrive, heavily smoothed to ignore Wi-Fi spikes
+      const networkDelay = Math.min(0.200, (sNow() - ts) / 1000);       
+      const trueHostTime = currentTime + networkDelay;
+      
+      // Calculate exactly what is coming out of MY physical speaker right now
       const myActualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) - outLat;
+      
       const drift = trueHostTime - myActualTime;
       const absDrift = Math.abs(drift);
 
-      if (absDrift > 0.500) applyPlayState(true, trueHostTime + outLat, sNow(), false);
-      else if (absDrift > 0.005 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          sourceNodeRef.current.playbackRate.value = Math.max(0.98, Math.min(1.02, 1.0 + (drift / 2.0)));
+      // --- THE AIRPODS PHASE-COHERENCE ENGINE ---
+
+      if (absDrift > 0.150) {
+          // TIER 1: MAJOR DESYNC (> 150ms)
+          // The network choked. A pitch-bend here would ruin the song. 
+          // Do a clean, instant hard-snap to fix the echo.
+          applyPlayState(true, trueHostTime + outLat, sNow(), false);
       } 
-      else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) sourceNodeRef.current.playbackRate.value = 1.0;
+      else if (absDrift > 0.015 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          // TIER 2: THE MICRO-SLIP (15ms to 150ms)
+          // We are drifting, but we CANNOT warp the pitch drastically or the party vibe dies.
+          // We apply a mathematically imperceptible speed change (MAX 0.4%)
+          const correction = drift > 0 ? 1.004 : 0.996;
+          sourceNodeRef.current.playbackRate.value = correction;
+      } 
+      else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          // TIER 3: THE HAAS DEADZONE (< 15ms)
+          // The human brain physically merges sounds that are under 15ms apart into a "Single Speaker".
+          // LOCK THE SPEED. Do not touch the pitch. Pure, lossless audio quality.
+          if (sourceNodeRef.current.playbackRate.value !== 1.0) {
+              sourceNodeRef.current.playbackRate.value = 1.0;
+          }
+      }
     });
     sock.on('queue-updated', ({ queue }) => { setQueue(queue); prefetchQueue(queue); });
     sock.on('chat-msg', ({ name, text }) => { 
