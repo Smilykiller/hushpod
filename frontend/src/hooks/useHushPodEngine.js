@@ -82,6 +82,22 @@ export default function useHushPodEngine() {
     stateRef.current.orbitActive = orbitActive;
   }, [queue, isLooping, isShuffle, currentSong, uname, amHost, members, globalVolume, orbitActive]);
 
+  // --- VISIBILITY WAKE-UP ENGINE ---
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      // The exact moment the user switches back to the HushPod tab...
+      if (!document.hidden && socketRef.current && !stateRef.current.amHost) {
+        // 1. Instantly repair the local CPU clock drift
+        syncClock().then(() => {
+          // 2. The next incoming heartbeat will now have perfectly repaired math
+          toast("Tab resumed: Re-locking sync...", "inf");
+        });
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
   useEffect(() => {
     const unlockAudio = () => { if (actxRef.current && actxRef.current.state === 'suspended') actxRef.current.resume(); };
     window.addEventListener('click', unlockAudio);
@@ -283,7 +299,7 @@ export default function useHushPodEngine() {
 
   const applyPlayState = (playing, currentTime, ts, isNewJoiner = false) => {
     if (!audioBufferRef.current) return;
-    const outLat = stateRef.current.outLat || 0.060;
+    const outLat = stateRef.current.outLat || 0.050;
     const elapsed = (Date.now() + stateRef.current.clockOff - ts) / 1000;
     
     if (!playing) { 
@@ -293,13 +309,19 @@ export default function useHushPodEngine() {
     }
     
     let expectedOffset = currentTime + elapsed + outLat;
-    let startTime = actxRef.current.currentTime + 0.05;
-    if (expectedOffset < 0) { startTime = actxRef.current.currentTime + Math.abs(expectedOffset); expectedOffset = 0; }
     
-    if (isNewJoiner && !stateRef.current.amHost && expectedOffset > 0) {
-        const delay = 3.0; expectedOffset += delay; startTime = actxRef.current.currentTime + delay; 
-        setSyncState({ state: 'syncing', label: 'Locking sync... playing in 3s' });
-        setTimeout(() => { if(stateRef.current.localPlayState) setSyncState({ state: 'synced', label: 'Locked Sync' }); }, delay * 1000);
+    // THE INSTANT START FIX: Give the hardware exactly 100ms to warm up, then fire perfectly.
+    const hardwareWarmup = 0.100;
+    let startTime = actxRef.current.currentTime + hardwareWarmup;
+
+    if (expectedOffset < 0) { 
+      startTime = actxRef.current.currentTime + Math.abs(expectedOffset); 
+      expectedOffset = 0; 
+    }
+    
+    if (isNewJoiner && !stateRef.current.amHost) {
+        expectedOffset += hardwareWarmup; 
+        setSyncState({ state: 'synced', label: 'Locked Sync' });
     } else {
         if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Locked Sync' });
     }
@@ -391,35 +413,30 @@ export default function useHushPodEngine() {
 
       const outLat = stateRef.current.outLat || 0.050; 
       
-      // Calculate how long the packet took to arrive, heavily smoothed to ignore Wi-Fi spikes
-      const networkDelay = Math.min(0.200, (sNow() - ts) / 1000);       
+      // TAB-SWITCH ARMOR: Calculate raw network delay
+      const rawNetworkDelay = (sNow() - ts) / 1000;
+      
+      // If a packet took more than 0.8 seconds, it means the browser froze the tab. 
+      // It is garbage data. Drop it instantly. We will wait for the next fresh packet.
+      if (rawNetworkDelay > 0.800 || rawNetworkDelay < -0.100) return; 
+      
+      const networkDelay = Math.max(0, rawNetworkDelay);       
       const trueHostTime = currentTime + networkDelay;
       
-      // Calculate exactly what is coming out of MY physical speaker right now
       const myActualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) - outLat;
-      
       const drift = trueHostTime - myActualTime;
       const absDrift = Math.abs(drift);
 
       // --- THE AIRPODS PHASE-COHERENCE ENGINE ---
-
       if (absDrift > 0.150) {
-          // TIER 1: MAJOR DESYNC (> 150ms)
-          // The network choked. A pitch-bend here would ruin the song. 
-          // Do a clean, instant hard-snap to fix the echo.
+          // If we drifted severely (like waking up from a frozen tab), snap back instantly.
           applyPlayState(true, trueHostTime + outLat, sNow(), false);
-      } 
-      else if (absDrift > 0.015 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          // TIER 2: THE MICRO-SLIP (15ms to 150ms)
-          // We are drifting, but we CANNOT warp the pitch drastically or the party vibe dies.
-          // We apply a mathematically imperceptible speed change (MAX 0.4%)
+      } else if (absDrift > 0.015 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          // Micro-slip to maintain pure pitch
           const correction = drift > 0 ? 1.004 : 0.996;
           sourceNodeRef.current.playbackRate.value = correction;
-      } 
-      else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          // TIER 3: THE HAAS DEADZONE (< 15ms)
-          // The human brain physically merges sounds that are under 15ms apart into a "Single Speaker".
-          // LOCK THE SPEED. Do not touch the pitch. Pure, lossless audio quality.
+      } else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          // The 15ms Deadzone (Perfect single-speaker audio)
           if (sourceNodeRef.current.playbackRate.value !== 1.0) {
               sourceNodeRef.current.playbackRate.value = 1.0;
           }
