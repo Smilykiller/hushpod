@@ -689,42 +689,51 @@ function App() {
     });
 
     sock.on('heartbeat', ({ currentTime, ts }) => {
-      // Ignore if I am the Host, or if my audio hasn't finished loading
+      // 1. Ignore if I am the Host, or if my audio hasn't finished downloading/decoding
       if (stateRef.current.amHost || !audioBufferRef.current) return;
       
-      const outLat = stateRef.current.outLat || 0.050;
-      const networkDelay = (sNow() - ts) / 1000;
-      const trueHostTime = currentTime + networkDelay + outLat;
+      const outLat = stateRef.current.outLat || 0.050; // The hardware delay of this specific phone/speaker
+      const networkDelay = (sNow() - ts) / 1000;       // How long the message took to cross the internet
+      
+      // The EXACT millisecond the Host is hearing in their ears right now
+      const trueHostTime = currentTime + networkDelay;
 
+      // 2. Catch up if paused (If the Host is playing, but I am paused due to slow decoding)
       if (!stateRef.current.localPlayState) {
-          applyPlayState(true, trueHostTime, sNow(), false);
+          applyPlayState(true, trueHostTime + outLat, sNow(), false);
           return;
       }
       
-      const actualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
-      const drift = trueHostTime - actualTime;
+      // 3. Calculate exactly what I am hearing in MY ears right now
+      // We subtract outLat because the sound takes a fraction of a second to travel from the chip to the speaker
+      const myActualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) - outLat;
+      
+      // Positive drift = I am BEHIND the host. Negative drift = I am AHEAD of the host.
+      const drift = trueHostTime - myActualTime;
       const absDrift = Math.abs(drift);
 
-      // --- THE MILLISECOND PERFECT "PHASE-LOCKED" ENGINE ---
+      // --- THE PROPORTIONAL "PHASE-LOCKED" SYNC ENGINE ---
 
-      if (absDrift > 0.250) {
-          // TIER 1: SNAP. If we are completely desynced (over 250ms), hard reset.
-          applyPlayState(true, trueHostTime, sNow(), false);
+      if (absDrift > 0.500) {
+          // TIER 1: CATASTROPHIC LAG (> 500ms)
+          // Someone's Wi-Fi dropped completely. Snap instantly to fix it.
+          applyPlayState(true, trueHostTime + outLat, sNow(), false);
       } 
-      else if (absDrift > 0.010 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          // TIER 2: DYNAMIC GLIDE. (10ms to 250ms off)
-          // Calculate the exact speed needed to close the gap smoothly over 1 second.
-          let correction = drift * 0.5; 
+      else if (absDrift > 0.005 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          // TIER 2: PROPORTIONAL GLIDE (5ms to 500ms off)
+          // Calculate the mathematically perfect speed to close this exact gap in exactly 2 seconds.
+          let optimalRate = 1.0 + (drift / 2.0); 
           
-          // Cap the speed change at 1% so the pitch shift is physically undetectable by human ears.
-          if (correction > 0.01) correction = 0.01;
-          if (correction < -0.01) correction = -0.01;
+          // STRICT CAP: Never bend the pitch by more than 2% (0.98x to 1.02x). 
+          // This ensures the human ear physically cannot detect the audio warping.
+          optimalRate = Math.max(0.98, Math.min(1.02, optimalRate));
 
-          sourceNodeRef.current.playbackRate.value = 1.0 + correction;
+          sourceNodeRef.current.playbackRate.value = optimalRate;
       } 
       else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          // TIER 3: ABSOLUTE PERFECTION. (Under 10ms)
-          // Lock speed dead-center at 1.0. Pure, original audio quality.
+          // TIER 3: ABSOLUTE PERFECTION (< 5ms)
+          // The human ear cannot detect an echo under 15ms. We tighten it to 5ms.
+          // Lock the speed dead-center at 1.0 for pure, original, lossless audio quality.
           sourceNodeRef.current.playbackRate.value = 1.0;
       }
     });
