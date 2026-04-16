@@ -30,7 +30,8 @@ export default function Room({
             <button className="btn-red btn-sm" onClick={() => { 
               sessionStorage.removeItem('hushpod_session'); 
               if(socketRef.current) socketRef.current.disconnect(); 
-              window.location.reload(); 
+              // FIX: Force the browser back to the home page, completely resetting the app
+              window.location.href = '/'; 
             }}>Leave</button>
           </div>
         </div>

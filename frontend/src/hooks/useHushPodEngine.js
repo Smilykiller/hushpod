@@ -454,8 +454,13 @@ export default function useHushPodEngine() {
     sock.on('member-joined', ({ members }) => { setMembers(members); });
     sock.on('member-left', ({ members }) => { setMembers(members); });
     sock.on('host-left', () => { 
-      sessionStorage.removeItem('hushpod_session'); toast('Host ended the room', 'err'); 
-      setTimeout(() => window.location.reload(), 2000); 
+      sessionStorage.removeItem('hushpod_session'); 
+      toast('Host ended the room', 'err'); 
+      
+      // FIX: Kick the user back to the home page after 2 seconds
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 2000); 
     });
   };
 
