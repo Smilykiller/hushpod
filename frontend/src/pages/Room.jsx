@@ -14,7 +14,8 @@ export default function Room({
   trackReady, progFillRef, tCurRef, audioBufferRef, fmt, seekClick, isShuffle, setIsShuffle,
   handleSeek, stateRef, actxRef, togglePlay, loopMode, toggleLoopMode, queue, setQueue,
   draggedIdx, setDraggedIdx, handleDrop, members, chat, uname, globalVolume, 
-  handleGlobalVolume, orbitActive, runSonarCalibration, syncState
+  handleGlobalVolume, orbitActive, runSonarCalibration, syncState,
+  playNext, playPrev // ADDED MISSING PROPS HERE
 }) {
   
   // NEW: State to handle the "Copied!" button feedback
