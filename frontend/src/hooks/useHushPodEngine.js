@@ -51,7 +51,13 @@ export default function useHushPodEngine() {
   const analyserRef = useRef(null);
   const trackCacheRef = useRef({}); 
   
-  const stateRef = useRef({ clockOff: 0, songOffset: 0, nodeStartTime: 0, localPlayState: false, amHost: false, queue: [], loop: false, shuffle: false, currentSongId: null, uname: '', members: [], globalVolume: 1.0, orbitActive: false });
+  // BUG 1 FIX: Added accumulatedRateDrift, lastHeartbeatTime, and isTransitioning to stateRef
+  const stateRef = useRef({ 
+    clockOff: 0, songOffset: 0, nodeStartTime: 0, localPlayState: false, amHost: false, 
+    queue: [], loop: false, shuffle: false, currentSongId: null, uname: '', members: [], 
+    globalVolume: 1.0, orbitActive: false, accumulatedRateDrift: 0, lastHeartbeatTime: 0, 
+    isTransitioning: false 
+  });
   
   const progFillRef = useRef(null);
   const tCurRef = useRef(null);
@@ -82,22 +88,6 @@ export default function useHushPodEngine() {
     stateRef.current.orbitActive = orbitActive;
   }, [queue, isLooping, isShuffle, currentSong, uname, amHost, members, globalVolume, orbitActive]);
 
-  // --- VISIBILITY WAKE-UP ENGINE ---
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      // The exact moment the user switches back to the HushPod tab...
-      if (!document.hidden && socketRef.current && !stateRef.current.amHost) {
-        // 1. Instantly repair the local CPU clock drift
-        syncClock().then(() => {
-          // 2. The next incoming heartbeat will now have perfectly repaired math
-          toast("Tab resumed: Re-locking sync...", "inf");
-        });
-      }
-    };
-    
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
   useEffect(() => {
     const unlockAudio = () => { if (actxRef.current && actxRef.current.state === 'suspended') actxRef.current.resume(); };
     window.addEventListener('click', unlockAudio);
@@ -119,6 +109,18 @@ export default function useHushPodEngine() {
     };
     if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
     return () => { if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener) navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // --- VISIBILITY WAKE-UP ENGINE (Tab-Switch Fix) ---
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden && socketRef.current && !stateRef.current.amHost) {
+        syncClock().then(() => toast("Tab resumed: Re-locking sync...", "inf"));
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
   useEffect(() => {
@@ -146,6 +148,7 @@ export default function useHushPodEngine() {
     } else {
       setIsSyncing(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -156,8 +159,10 @@ export default function useHushPodEngine() {
       toast(`Scanned! Enter your name to join room ${roomFromUrl.toUpperCase()}`, 'ok');
       window.history.replaceState({}, document.title, window.location.pathname);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // --- BACKGROUND-RESILIENT TIMING ENGINE ---
   useEffect(() => {
     if (location.pathname !== '/room') return;
     const workerBlob = new Blob([`
@@ -174,13 +179,40 @@ export default function useHushPodEngine() {
     worker.onmessage = (e) => {
       if (e.data === 'heartbeat') {
         const s = stateRef.current;
-        if (s.localPlayState && socketRef.current && s.amHost) {
-          socketRef.current.emit('heartbeat', { currentTime: Math.max(0, s.songOffset + (actxRef.current.currentTime - s.nodeStartTime)) });
+        
+        // BUG 2 FIX: Background Auto-Play Handler
+        if (s.localPlayState && socketRef.current && s.amHost && audioBufferRef.current) {
+          const now = actxRef.current.currentTime;
+          const delta = now - (s.lastHeartbeatTime || now);
+          s.lastHeartbeatTime = now;
+          
+          if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+              s.accumulatedRateDrift += delta * (sourceNodeRef.current.playbackRate.value - 1.0);
+          }
+
+          const currentAudioPos = Math.max(0, s.songOffset + (now - s.nodeStartTime) + s.accumulatedRateDrift);
+          socketRef.current.emit('heartbeat', { currentTime: currentAudioPos });
+
+          // Trigger next song 0.4s BEFORE the current one ends, preventing OS background suspension
+          if (currentAudioPos >= audioBufferRef.current.duration - 0.4 && !s.isTransitioning) {
+              s.isTransitioning = true;
+              const q = s.queue;
+              if (q.length > 0) {
+                  if (s.loop) socketRef.current.emit('play-song', { songId: s.currentSongId, autoPlay: true });
+                  else if (s.shuffle) socketRef.current.emit('play-song', { songId: q[Math.floor(Math.random() * q.length)].id, autoPlay: true });
+                  else {
+                      const idx = q.findIndex(x => x.id === s.currentSongId);
+                      if (idx !== -1 && idx < q.length - 1) socketRef.current.emit('play-song', { songId: q[idx + 1].id, autoPlay: true });
+                      else { socketRef.current.emit('song-ended', {}); setCurrentSong(null); }
+                  }
+              } else { socketRef.current.emit('song-ended', {}); setCurrentSong(null); }
+          }
         }
       } else if (e.data === 'clocksync') { syncClock(); }
     };
     worker.postMessage('start');
     return () => { worker.postMessage('stop'); worker.terminate(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
 
   const initSystem = async () => {
@@ -242,7 +274,9 @@ export default function useHushPodEngine() {
 
     sourceNodeRef.current.onended = () => {
       const s = stateRef.current;
-      if (s.localPlayState && actxRef.current.currentTime >= s.nodeStartTime + audioBufferRef.current.duration - s.songOffset - 0.1) {
+      // Protected by isTransitioning flag so it doesn't double-fire if the worker caught it first
+      if (s.localPlayState && !s.isTransitioning && actxRef.current.currentTime >= s.nodeStartTime + audioBufferRef.current.duration - s.songOffset - 0.1) {
+        s.isTransitioning = true;
         if (s.amHost) {
           const q = s.queue;
           if (q.length > 0) {
@@ -282,7 +316,9 @@ export default function useHushPodEngine() {
         audioBufferRef.current = trackCacheRef.current[songId]; 
         setTrackReady(true); applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       } else {
-        if (isNewJoiner) setTrackReady(false); 
+        // BUG 3 FIX: Only blur the screen on the VERY FIRST load, not between every song transition
+        if (!audioBufferRef.current) setTrackReady(false); 
+        
         if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Buffering next...' });
         if (songId) trackCacheRef.current[songId] = 'fetching';
         
@@ -299,7 +335,7 @@ export default function useHushPodEngine() {
 
   const applyPlayState = (playing, currentTime, ts, isNewJoiner = false) => {
     if (!audioBufferRef.current) return;
-    const outLat = stateRef.current.outLat || 0.050;
+    const outLat = stateRef.current.outLat || 0.060;
     const elapsed = (Date.now() + stateRef.current.clockOff - ts) / 1000;
     
     if (!playing) { 
@@ -307,19 +343,19 @@ export default function useHushPodEngine() {
       if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Paused' });
       return; 
     }
+
+    // Reset drift math specifically for BUG 1
+    stateRef.current.accumulatedRateDrift = 0;
+    stateRef.current.lastHeartbeatTime = actxRef.current.currentTime;
+    stateRef.current.isTransitioning = false;
     
     let expectedOffset = currentTime + elapsed + outLat;
-    
-    // THE INSTANT START FIX: Give the hardware exactly 100ms to warm up, then fire perfectly.
-    const hardwareWarmup = 0.100;
+    const hardwareWarmup = 0.100; // Instant start!
     let startTime = actxRef.current.currentTime + hardwareWarmup;
 
-    if (expectedOffset < 0) { 
-      startTime = actxRef.current.currentTime + Math.abs(expectedOffset); 
-      expectedOffset = 0; 
-    }
+    if (expectedOffset < 0) { startTime = actxRef.current.currentTime + Math.abs(expectedOffset); expectedOffset = 0; }
     
-    if (isNewJoiner && !stateRef.current.amHost) {
+    if (isNewJoiner && !stateRef.current.amHost && expectedOffset > 0) {
         expectedOffset += hardwareWarmup; 
         setSyncState({ state: 'synced', label: 'Locked Sync' });
     } else {
@@ -408,40 +444,38 @@ export default function useHushPodEngine() {
     sock.on('playstate', ({ playing, currentTime, ts }) => { 
       if(!stateRef.current.amHost) applyPlayState(playing, currentTime, ts, false); 
     });
+    
     sock.on('heartbeat', ({ currentTime, ts }) => {
       if (stateRef.current.amHost || !audioBufferRef.current || !stateRef.current.localPlayState) return;
-
       const outLat = stateRef.current.outLat || 0.050; 
       
-      // TAB-SWITCH ARMOR: Calculate raw network delay
       const rawNetworkDelay = (sNow() - ts) / 1000;
-      
-      // If a packet took more than 0.8 seconds, it means the browser froze the tab. 
-      // It is garbage data. Drop it instantly. We will wait for the next fresh packet.
-      if (rawNetworkDelay > 0.800 || rawNetworkDelay < -0.100) return; 
-      
+      if (rawNetworkDelay > 0.800 || rawNetworkDelay < -0.100) return; // Drop frozen packets instantly
       const networkDelay = Math.max(0, rawNetworkDelay);       
       const trueHostTime = currentTime + networkDelay;
-      
-      const myActualTime = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) - outLat;
+
+      // BUG 1 FIX: Calculate exact audio position tracking past playbackRate shifts
+      const now = actxRef.current.currentTime;
+      const delta = now - (stateRef.current.lastHeartbeatTime || now);
+      stateRef.current.lastHeartbeatTime = now;
+
+      if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          stateRef.current.accumulatedRateDrift += delta * (sourceNodeRef.current.playbackRate.value - 1.0);
+      }
+
+      const myActualTime = stateRef.current.songOffset + (now - stateRef.current.nodeStartTime) + stateRef.current.accumulatedRateDrift - outLat;
       const drift = trueHostTime - myActualTime;
       const absDrift = Math.abs(drift);
 
-      // --- THE AIRPODS PHASE-COHERENCE ENGINE ---
-      if (absDrift > 0.150) {
-          // If we drifted severely (like waking up from a frozen tab), snap back instantly.
-          applyPlayState(true, trueHostTime + outLat, sNow(), false);
-      } else if (absDrift > 0.015 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          // Micro-slip to maintain pure pitch
-          const correction = drift > 0 ? 1.004 : 0.996;
-          sourceNodeRef.current.playbackRate.value = correction;
-      } else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          // The 15ms Deadzone (Perfect single-speaker audio)
-          if (sourceNodeRef.current.playbackRate.value !== 1.0) {
-              sourceNodeRef.current.playbackRate.value = 1.0;
-          }
+      if (absDrift > 0.150) applyPlayState(true, trueHostTime + outLat, sNow(), false);
+      else if (absDrift > 0.015 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.006 : 0.994;
+      } 
+      else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          if (sourceNodeRef.current.playbackRate.value !== 1.0) sourceNodeRef.current.playbackRate.value = 1.0;
       }
     });
+
     sock.on('queue-updated', ({ queue }) => { setQueue(queue); prefetchQueue(queue); });
     sock.on('chat-msg', ({ name, text }) => { 
       setChat(prev => [...prev, { name, text }]); 
@@ -454,13 +488,8 @@ export default function useHushPodEngine() {
     sock.on('member-joined', ({ members }) => { setMembers(members); });
     sock.on('member-left', ({ members }) => { setMembers(members); });
     sock.on('host-left', () => { 
-      sessionStorage.removeItem('hushpod_session'); 
-      toast('Host ended the room', 'err'); 
-      
-      // FIX: Kick the user back to the home page after 2 seconds
-      setTimeout(() => {
-        window.location.href = '/';
-      }, 2000); 
+      sessionStorage.removeItem('hushpod_session'); toast('Host ended the room', 'err'); 
+      setTimeout(() => window.location.href = '/', 2000); 
     });
   };
 
@@ -523,7 +552,6 @@ export default function useHushPodEngine() {
   const uploadSongs = (files) => {
     if (!files || files.length === 0) return;
     if (!amHost && !guestUploads) return toast('Host has locked uploads', 'err');
-    
     let filesToUpload = Array.from(files);
     if (filesToUpload.length > 10) { toast('Max 10 files allowed. Slicing list.', 'inf'); filesToUpload = filesToUpload.slice(0, 10); }
 
@@ -554,7 +582,6 @@ export default function useHushPodEngine() {
     setQueue(newQ); socketRef.current.emit('reorder-queue', { newOrder: newQ.map(q => q.id) }); setDraggedIdx(null);
   };
 
-  // Expose everything needed by the UI
   return {
     setView, toastData, modals, setModals, uploadProgress, roomTab, setRoomTab,
     uname, setUname, roomCode, isSyncing, codeInput, setCodeInput, members,
