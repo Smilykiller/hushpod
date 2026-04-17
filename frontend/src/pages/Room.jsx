@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 
 // Import our new puzzle pieces!
@@ -17,6 +17,16 @@ export default function Room({
   handleGlobalVolume, orbitActive, runSonarCalibration, syncState
 }) {
   
+  // NEW: State to handle the "Copied!" button feedback
+  const [copied, setCopied] = useState(false);
+  const joinLink = `${window.location.origin}/?room=${roomCode}`;
+
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(joinLink);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <>
       <div id="room" className="scr on" style={{ display: 'flex' }}>
@@ -30,7 +40,6 @@ export default function Room({
             <button className="btn-red btn-sm" onClick={() => { 
               sessionStorage.removeItem('hushpod_session'); 
               if(socketRef.current) socketRef.current.disconnect(); 
-              // FIX: Force the browser back to the home page, completely resetting the app
               window.location.href = '/'; 
             }}>Leave</button>
           </div>
@@ -57,7 +66,7 @@ export default function Room({
               isShuffle={isShuffle} setIsShuffle={setIsShuffle} handleSeek={handleSeek} 
               stateRef={stateRef} actxRef={actxRef} togglePlay={togglePlay} 
               isLooping={isLooping} setIsLooping={setIsLooping} queue={queue} 
-              draggedIdx={draggedIdx} setDraggedIdx={setDraggedIdx} handleDrop={handleDrop} 
+              setQueue={setQueue} draggedIdx={draggedIdx} setDraggedIdx={setDraggedIdx} handleDrop={handleDrop} 
               socketRef={socketRef}
             />
           </div>
@@ -115,14 +124,35 @@ export default function Room({
         </div>
       )}
 
+      {/* --- UPDATED QR & SHARE MODAL --- */}
       {modals.qr && (
         <div style={{position:'fixed', inset:0, zIndex:2000, background:'rgba(0,0,0,.88)', display:'flex', alignItems:'center', justifyContent:'center', padding:'20px'}}>
           <div style={{background:'var(--s1)', border:'1px solid rgba(255,214,10,.35)', borderRadius:'22px', padding:'30px 24px', maxWidth:'320px', width:'100%', textAlign:'center'}}>
             <h3 style={{color:'#fff', marginBottom:'15px', fontFamily:"'Bebas Neue',sans-serif", letterSpacing:'2px', fontSize:'28px'}}>Scan to Join</h3>
+            
             <div style={{background:'#ffffff', padding:'15px', borderRadius:'10px', display:'inline-block', marginBottom:'15px'}}>
-              <QRCodeSVG value={`${window.location.origin}/?room=${roomCode}`} size={180} bgColor="#ffffff" fgColor="#000000" level="L" includeMargin={false} />
+              <QRCodeSVG value={joinLink} size={180} bgColor="#ffffff" fgColor="#000000" level="L" includeMargin={false} />
             </div>
-            <p style={{color:'var(--sub)', fontSize:'13px', marginBottom:'20px'}}>Or use code: <strong style={{color:'var(--pink)', fontSize:'18px', letterSpacing:'2px'}}>{roomCode}</strong></p>
+            
+            <p style={{color:'var(--sub)', fontSize:'13px', marginBottom:'12px'}}>Or use code: <strong style={{color:'var(--pink)', fontSize:'18px', letterSpacing:'2px'}}>{roomCode}</strong></p>
+            
+            {/* NEW: Copy Link Input & Button */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--s2)', padding: '6px 8px', borderRadius: '12px', border: '1px solid var(--border)', marginBottom: '20px' }}>
+              <input 
+                type="text" 
+                readOnly 
+                value={joinLink} 
+                style={{ flex: 1, background: 'transparent', border: 'none', color: 'var(--sub)', fontSize: '11px', outline: 'none', textOverflow: 'ellipsis' }} 
+              />
+              <button 
+                className="btn-cyan" 
+                style={{ width: 'auto', margin: 0, padding: '8px 14px', fontSize: '11px', borderRadius: '8px' }} 
+                onClick={handleCopyLink}
+              >
+                {copied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+
             <button className="btn-ghost" style={{width:'100%', padding:'15px', borderRadius:'12px', fontWeight:'600', cursor:'pointer'}} onClick={() => setModals({...modals, qr: false})}>Close</button>
           </div>
         </div>
