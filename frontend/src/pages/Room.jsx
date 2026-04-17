@@ -12,7 +12,7 @@ export default function Room({
   roomTitle, roomCode, modals, setModals, socketRef, roomTab, setRoomTab, amHost,
   guestUploads, setGuestUploads, uploadSongs, uploadProgress, currentSong, isPlaying,
   trackReady, progFillRef, tCurRef, audioBufferRef, fmt, seekClick, isShuffle, setIsShuffle,
-  handleSeek, stateRef, actxRef, togglePlay, isLooping, setIsLooping, queue, setQueue,
+  handleSeek, stateRef, actxRef, togglePlay, loopMode, toggleLoopMode, queue, setQueue,
   draggedIdx, setDraggedIdx, handleDrop, members, chat, uname, globalVolume, 
   handleGlobalVolume, orbitActive, runSonarCalibration, syncState
 }) {
@@ -65,9 +65,9 @@ export default function Room({
               tCurRef={tCurRef} audioBufferRef={audioBufferRef} fmt={fmt} seekClick={seekClick} 
               isShuffle={isShuffle} setIsShuffle={setIsShuffle} handleSeek={handleSeek} 
               stateRef={stateRef} actxRef={actxRef} togglePlay={togglePlay} 
-              isLooping={isLooping} setIsLooping={setIsLooping} queue={queue} 
+              loopMode={loopMode} toggleLoopMode={toggleLoopMode} queue={queue} 
               setQueue={setQueue} draggedIdx={draggedIdx} setDraggedIdx={setDraggedIdx} handleDrop={handleDrop} 
-              socketRef={socketRef}
+              socketRef={socketRef} playNext={playNext} playPrev={playPrev}
             />
           </div>
 

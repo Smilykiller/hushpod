@@ -1,47 +1,15 @@
 import React from 'react';
 
 export default function DJDesk({
-  setRoomTab,
-  amHost,
-  guestUploads,
-  currentSong,
-  uploadSongs,
-  uploadProgress,
-  isPlaying,
-  trackReady,
-  progFillRef,
-  tCurRef,
-  audioBufferRef,
-  fmt,
-  seekClick,
-  isShuffle,
-  setIsShuffle,
-  handleSeek,
-  stateRef,
-  actxRef,
-  togglePlay,
-  isLooping,
-  setIsLooping,
-  queue,
-  draggedIdx,
-  setDraggedIdx,
-  handleDrop,
-  socketRef
+  setRoomTab, amHost, guestUploads, currentSong, uploadSongs, uploadProgress,
+  isPlaying, trackReady, progFillRef, tCurRef, audioBufferRef, fmt, seekClick,
+  isShuffle, setIsShuffle, handleSeek, stateRef, actxRef, togglePlay,
+  loopMode, toggleLoopMode, queue, draggedIdx, setDraggedIdx, handleDrop, socketRef,
+  playNext, playPrev 
 }) {
   return (
     <>
-      <div style={{
-        background: 'rgba(247,37,133,0.05)', 
-        border: '1px solid rgba(247,37,133,0.2)', 
-        borderRadius: '8px', 
-        padding: '10px 14px', 
-        marginBottom: '15px', 
-        fontSize: '12px', 
-        color: 'var(--sub)', 
-        display: 'flex', 
-        alignItems: 'center', 
-        gap: '10px'
-      }}>
+      <div style={{ background: 'rgba(247,37,133,0.05)', border: '1px solid rgba(247,37,133,0.2)', borderRadius: '8px', padding: '10px 14px', marginBottom: '15px', fontSize: '12px', color: 'var(--sub)', display: 'flex', alignItems: 'center', gap: '10px' }}>
         <span style={{fontSize: '16px'}}>🔊</span>
         <div style={{flex: 1, lineHeight: '1.4'}}>
           <strong style={{color: 'var(--text)'}}>Using a Bluetooth speaker?</strong><br/>
@@ -89,13 +57,25 @@ export default function DJDesk({
               <div style={{display:'flex', justifyContent:'space-between', fontSize:'11px', color:'var(--sub)', fontFamily:"'JetBrains Mono',monospace"}}><span ref={tCurRef}>0:00</span><span>{audioBufferRef.current ? fmt(audioBufferRef.current.duration) : '0:00'}</span></div>
             </div>
             
+            {/* ALL 7 BUTTONS (Shuffle, Prev, -10s, Play, +10s, Next, Repeat) */}
             {amHost && (
-              <div style={{display:'flex', justifyContent:'center', alignItems:'center', gap:'15px', marginTop:'10px'}}>
-                <button className="btn-ghost" style={{color: isShuffle ? 'var(--pink)' : 'var(--sub)', borderColor: isShuffle ? 'var(--pink)' : 'var(--border)', width:'40px', height:'40px', borderRadius:'8px', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => setIsShuffle(!isShuffle)}>🔀</button>
-                <button className="btn-ghost" style={{width:'44px', height:'44px', borderRadius:'50%', padding:0, fontSize:'18px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => handleSeek(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) - 10)}>⏮</button>
-                <button className="btn-pink" style={{width:'60px', height:'60px', borderRadius:'50%', padding:0, fontSize:'24px', display:'flex', alignItems:'center', justifyContent:'center', margin:0, opacity: trackReady ? 1 : 0.4, cursor: trackReady ? 'pointer' : 'not-allowed', transition: 'all 0.3s'}} onClick={() => { if (trackReady) togglePlay(); }} disabled={!trackReady}>{isPlaying ? '⏸' : '▶'}</button>
-                <button className="btn-ghost" style={{width:'44px', height:'44px', borderRadius:'50%', padding:0, fontSize:'18px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => handleSeek(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) + 10)}>⏭</button>
-                <button className="btn-ghost" style={{color: isLooping ? 'var(--pink)' : 'var(--sub)', borderColor: isLooping ? 'var(--pink)' : 'var(--border)', width:'40px', height:'40px', borderRadius:'8px', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => setIsLooping(!isLooping)}>🔁</button>
+              <div style={{display:'flex', justifyContent:'center', alignItems:'center', gap:'8px', marginTop:'10px'}}>
+                <button className="btn-ghost" style={{color: isShuffle ? 'var(--pink)' : 'var(--sub)', borderColor: isShuffle ? 'var(--pink)' : 'var(--border)', width:'36px', height:'36px', borderRadius:'8px', padding:0, fontSize:'14px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => setIsShuffle(!isShuffle)}>🔀</button>
+                
+                <button className="btn-ghost" style={{width:'40px', height:'40px', borderRadius:'50%', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={playPrev}>⏮</button>
+                
+                <button className="btn-ghost" style={{width:'40px', height:'40px', borderRadius:'50%', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => handleSeek(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) - 10)}>⏪</button>
+                
+                <button className="btn-pink" style={{width:'54px', height:'54px', borderRadius:'50%', padding:0, fontSize:'22px', display:'flex', alignItems:'center', justifyContent:'center', margin:0, opacity: trackReady ? 1 : 0.4, cursor: trackReady ? 'pointer' : 'not-allowed', transition: 'all 0.3s'}} onClick={() => { if (trackReady) togglePlay(); }} disabled={!trackReady}>{isPlaying ? '⏸' : '▶'}</button>
+                
+                <button className="btn-ghost" style={{width:'40px', height:'40px', borderRadius:'50%', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => handleSeek(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime) + 10)}>⏩</button>
+                
+                <button className="btn-ghost" style={{width:'40px', height:'40px', borderRadius:'50%', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => playNext(true)}>⏭</button>
+                
+                {/* 3-STATE REPEAT TOGGLE */}
+                <button className="btn-ghost" style={{color: loopMode !== 'none' ? 'var(--pink)' : 'var(--sub)', borderColor: loopMode !== 'none' ? 'var(--pink)' : 'var(--border)', width:'36px', height:'36px', borderRadius:'8px', padding:0, fontSize:'16px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={toggleLoopMode}>
+                  {loopMode === 'song' ? '🔂' : '🔁'}
+                </button>
               </div>
             )}
           </div>

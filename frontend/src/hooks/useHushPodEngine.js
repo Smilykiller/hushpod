@@ -35,9 +35,11 @@ export default function useHushPodEngine() {
   const [guestUploads, setGuestUploads] = useState(false);
   const [globalVolume, setGlobalVolume] = useState(1.0);
   const [orbitActive, setOrbitActive] = useState(false);
-  const [isLooping, setIsLooping] = useState(false);
   const [isShuffle, setIsShuffle] = useState(false);
   const [draggedIdx, setDraggedIdx] = useState(null);
+
+  // NEW: 3-State Loop (none, queue, song)
+  const [loopMode, setLoopMode] = useState('none');
 
   const [tosChecked, setTosChecked] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
@@ -51,10 +53,11 @@ export default function useHushPodEngine() {
   const analyserRef = useRef(null);
   const trackCacheRef = useRef({}); 
   
-  // BUG 1 FIX: Added accumulatedRateDrift, lastHeartbeatTime, and isTransitioning to stateRef
+  const loadSessionId = useRef(0);
+  
   const stateRef = useRef({ 
     clockOff: 0, songOffset: 0, nodeStartTime: 0, localPlayState: false, amHost: false, 
-    queue: [], loop: false, shuffle: false, currentSongId: null, uname: '', members: [], 
+    queue: [], loopMode: 'none', shuffle: false, currentSongId: null, uname: '', members: [], 
     globalVolume: 1.0, orbitActive: false, accumulatedRateDrift: 0, lastHeartbeatTime: 0, 
     isTransitioning: false 
   });
@@ -77,8 +80,20 @@ export default function useHushPodEngine() {
   const roomTitle = currentHost ? `${currentHost.name}'s Party` : 'ROOM';
 
   useEffect(() => {
+    let wakeLock = null;
+    const requestWakeLock = async () => {
+      try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } 
+      catch (err) {}
+    };
+    requestWakeLock();
+    const handleVis = () => { if (document.visibilityState === 'visible') requestWakeLock(); };
+    document.addEventListener('visibilitychange', handleVis);
+    return () => document.removeEventListener('visibilitychange', handleVis);
+  }, []);
+
+  useEffect(() => {
     stateRef.current.queue = queue;
-    stateRef.current.loop = isLooping;
+    stateRef.current.loopMode = loopMode; // Updated to 3-state
     stateRef.current.shuffle = isShuffle;
     stateRef.current.currentSongId = currentSong?.id;
     stateRef.current.uname = uname;
@@ -86,7 +101,7 @@ export default function useHushPodEngine() {
     stateRef.current.members = members;
     stateRef.current.globalVolume = globalVolume;
     stateRef.current.orbitActive = orbitActive;
-  }, [queue, isLooping, isShuffle, currentSong, uname, amHost, members, globalVolume, orbitActive]);
+  }, [queue, loopMode, isShuffle, currentSong, uname, amHost, members, globalVolume, orbitActive]);
 
   useEffect(() => {
     const unlockAudio = () => { if (actxRef.current && actxRef.current.state === 'suspended') actxRef.current.resume(); };
@@ -112,7 +127,6 @@ export default function useHushPodEngine() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- VISIBILITY WAKE-UP ENGINE (Tab-Switch Fix) ---
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (!document.hidden && socketRef.current && !stateRef.current.amHost) {
@@ -131,16 +145,11 @@ export default function useHushPodEngine() {
       initSystem().then(() => {
         socketRef.current.emit('join-room', { code, name, claimHost: false }, (res) => {
           if (res.error) { sessionStorage.removeItem('hushpod_session'); setIsSyncing(false); return toast(res.error, 'err'); }
-          if (res.members && res.members.length > 15) {
-             sessionStorage.removeItem('hushpod_session');
-             if (socketRef.current) { socketRef.current.disconnect(); socketRef.current = null; }
-             setIsSyncing(false); setView('app-entry'); return toast('Room is full (Max 15)!', 'err');
-          }
           setRoomCode(code); setMembers(res.members); setQueue(res.queue);
           setGuestUploads(res.guestUploads); setGlobalVolume(res.globalVolume); setOrbitActive(res.orbitActive || false);
           if(res.currentSong) {
             setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
-            guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true, res.currentSong.songId);
+            guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true, res.currentSong.songId, ++loadSessionId.current);
           }
           setIsSyncing(false); setRoomTab('dj'); setView('room');
         });
@@ -162,7 +171,6 @@ export default function useHushPodEngine() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- BACKGROUND-RESILIENT TIMING ENGINE ---
   useEffect(() => {
     if (location.pathname !== '/room') return;
     const workerBlob = new Blob([`
@@ -179,8 +187,6 @@ export default function useHushPodEngine() {
     worker.onmessage = (e) => {
       if (e.data === 'heartbeat') {
         const s = stateRef.current;
-        
-        // BUG 2 FIX: Background Auto-Play Handler
         if (s.localPlayState && socketRef.current && s.amHost && audioBufferRef.current) {
           const now = actxRef.current.currentTime;
           const delta = now - (s.lastHeartbeatTime || now);
@@ -193,19 +199,9 @@ export default function useHushPodEngine() {
           const currentAudioPos = Math.max(0, s.songOffset + (now - s.nodeStartTime) + s.accumulatedRateDrift);
           socketRef.current.emit('heartbeat', { currentTime: currentAudioPos });
 
-          // Trigger next song 0.4s BEFORE the current one ends, preventing OS background suspension
           if (currentAudioPos >= audioBufferRef.current.duration - 0.4 && !s.isTransitioning) {
               s.isTransitioning = true;
-              const q = s.queue;
-              if (q.length > 0) {
-                  if (s.loop) socketRef.current.emit('play-song', { songId: s.currentSongId, autoPlay: true });
-                  else if (s.shuffle) socketRef.current.emit('play-song', { songId: q[Math.floor(Math.random() * q.length)].id, autoPlay: true });
-                  else {
-                      const idx = q.findIndex(x => x.id === s.currentSongId);
-                      if (idx !== -1 && idx < q.length - 1) socketRef.current.emit('play-song', { songId: q[idx + 1].id, autoPlay: true });
-                      else { socketRef.current.emit('song-ended', {}); setCurrentSong(null); }
-                  }
-              } else { socketRef.current.emit('song-ended', {}); setCurrentSong(null); }
+              playNext(false); // Natural end of song
           }
         }
       } else if (e.data === 'clocksync') { syncClock(); }
@@ -274,21 +270,9 @@ export default function useHushPodEngine() {
 
     sourceNodeRef.current.onended = () => {
       const s = stateRef.current;
-      // Protected by isTransitioning flag so it doesn't double-fire if the worker caught it first
       if (s.localPlayState && !s.isTransitioning && actxRef.current.currentTime >= s.nodeStartTime + audioBufferRef.current.duration - s.songOffset - 0.1) {
         s.isTransitioning = true;
-        if (s.amHost) {
-          const q = s.queue;
-          if (q.length > 0) {
-            if (s.loop) socketRef.current.emit('play-song', { songId: s.currentSongId, autoPlay: true });
-            else if (s.shuffle) socketRef.current.emit('play-song', { songId: q[Math.floor(Math.random() * q.length)].id, autoPlay: true });
-            else {
-              const idx = q.findIndex(x => x.id === s.currentSongId);
-              if (idx !== -1 && idx < q.length - 1) socketRef.current.emit('play-song', { songId: q[idx + 1].id, autoPlay: true });
-              else { socketRef.current.emit('song-ended', {}); setCurrentSong(null); }
-            }
-          } else { socketRef.current.emit('song-ended', {}); setCurrentSong(null); }
-        }
+        playNext(false); // Natural end of song
       }
     };
     sourceNodeRef.current.start(actxTime, songTime);
@@ -309,26 +293,31 @@ export default function useHushPodEngine() {
     }
   };
 
-  const guestLoadAndSync = async (url, playState, isNewJoiner = false, songId = null) => {
+  const guestLoadAndSync = async (url, playState, isNewJoiner = false, songId = null, expectedLoadId) => {
     stopAudio(); 
     try {
       if (songId && trackCacheRef.current[songId] && trackCacheRef.current[songId] !== 'fetching') {
         audioBufferRef.current = trackCacheRef.current[songId]; 
+        if (expectedLoadId !== loadSessionId.current) return; 
         setTrackReady(true); applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       } else {
-        // BUG 3 FIX: Only blur the screen on the VERY FIRST load, not between every song transition
         if (!audioBufferRef.current) setTrackReady(false); 
         
         if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Buffering next...' });
         if (songId) trackCacheRef.current[songId] = 'fetching';
         
         const res = await fetch(url);
-        audioBufferRef.current = await actxRef.current.decodeAudioData(await res.arrayBuffer());
+        const decoded = await actxRef.current.decodeAudioData(await res.arrayBuffer());
         
+        if (expectedLoadId !== loadSessionId.current) return; 
+        
+        audioBufferRef.current = decoded;
         if (songId) trackCacheRef.current[songId] = audioBufferRef.current; 
+        
         setTrackReady(true); applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       }
     } catch(e) { 
+      if (expectedLoadId !== loadSessionId.current) return;
       setTrackReady(true); if (!stateRef.current.amHost) setSyncState({ state: 'fixing', label: 'Error loading track' }); 
     }
   };
@@ -344,13 +333,12 @@ export default function useHushPodEngine() {
       return; 
     }
 
-    // Reset drift math specifically for BUG 1
     stateRef.current.accumulatedRateDrift = 0;
     stateRef.current.lastHeartbeatTime = actxRef.current.currentTime;
     stateRef.current.isTransitioning = false;
     
     let expectedOffset = currentTime + elapsed + outLat;
-    const hardwareWarmup = 0.100; // Instant start!
+    const hardwareWarmup = 0.100; 
     let startTime = actxRef.current.currentTime + hardwareWarmup;
 
     if (expectedOffset < 0) { startTime = actxRef.current.currentTime + Math.abs(expectedOffset); expectedOffset = 0; }
@@ -364,6 +352,68 @@ export default function useHushPodEngine() {
 
     if (expectedOffset >= audioBufferRef.current.duration) { stopAudio(); return; }
     playAudioAt(expectedOffset, startTime);
+  };
+
+  // --- NEW: Toggle 3-State Loop ---
+  const toggleLoopMode = () => {
+    setLoopMode(prev => prev === 'none' ? 'queue' : prev === 'queue' ? 'song' : 'none');
+  };
+
+  // --- UPDATED: Smart Next / Prev Logic ---
+  const playNext = (isManualClick = false) => {
+    if (!stateRef.current.amHost) return;
+    const s = stateRef.current;
+    const q = s.queue;
+    if (q.length === 0) return;
+
+    // If the song naturally ended and we are on "Repeat Song", replay it instantly
+    if (!isManualClick && s.loopMode === 'song') {
+      socketRef.current.emit('play-song', { songId: s.currentSongId, autoPlay: true });
+      return;
+    }
+
+    if (s.shuffle) {
+      socketRef.current.emit('play-song', { songId: q[Math.floor(Math.random() * q.length)].id, autoPlay: true });
+    } else {
+      const idx = q.findIndex(x => x.id === s.currentSongId);
+      if (idx !== -1 && idx < q.length - 1) {
+        socketRef.current.emit('play-song', { songId: q[idx + 1].id, autoPlay: true });
+      } else if (s.loopMode === 'queue' || s.loopMode === 'song') {
+        // We reached the end of the list. If looping is active, go back to song 1
+        socketRef.current.emit('play-song', { songId: q[0].id, autoPlay: true });
+      } else {
+        socketRef.current.emit('song-ended', {}); setCurrentSong(null);
+      }
+    }
+  };
+
+  const playPrev = () => {
+    if (!stateRef.current.amHost) return;
+    const s = stateRef.current;
+    const q = s.queue;
+    if (q.length === 0) return;
+
+    const idx = q.findIndex(x => x.id === s.currentSongId);
+    if (idx > 0) {
+      socketRef.current.emit('play-song', { songId: q[idx - 1].id, autoPlay: true });
+    } else {
+      socketRef.current.emit('play-song', { songId: q[0].id, autoPlay: true }); 
+    }
+  };
+
+  const togglePlay = () => {
+    if (!amHost) return;
+    const s = stateRef.current;
+    let cur = s.localPlayState ? s.songOffset + (actxRef.current.currentTime - s.nodeStartTime) : s.songOffset;
+    if (!s.localPlayState) { socketRef.current.emit('schedule-play', { currentTime: cur }); }
+    else { socketRef.current.emit('playstate', { playing: false, currentTime: cur, ts: sNow() }); applyPlayState(false, cur, sNow(), false); }
+  };
+
+  const seekClick = (e) => {
+    if (!amHost || !audioBufferRef.current) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const percent = (e.clientX - r.left) / r.width;
+    handleSeek(Math.max(0, Math.min(audioBufferRef.current.duration, percent * audioBufferRef.current.duration)));
   };
 
   const handleSeek = (newTime) => {
@@ -434,8 +484,10 @@ export default function useHushPodEngine() {
 
   const setupSocketListeners = (sock) => {
     sock.on('song-changed', ({ songId, name, streamUrl, playState }) => {
+      const currentLoadId = ++loadSessionId.current;
+      stopAudio(); 
       setCurrentSong({ id: songId, name, duration: 0 });
-      guestLoadAndSync(SERVER + streamUrl, playState, !stateRef.current.amHost, songId);
+      guestLoadAndSync(SERVER + streamUrl, playState, !stateRef.current.amHost, songId, currentLoadId);
     });
     sock.on('play-scheduled', ({ currentTime, targetTs }) => {
       if(!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Readying...' });
@@ -450,11 +502,10 @@ export default function useHushPodEngine() {
       const outLat = stateRef.current.outLat || 0.050; 
       
       const rawNetworkDelay = (sNow() - ts) / 1000;
-      if (rawNetworkDelay > 0.800 || rawNetworkDelay < -0.100) return; // Drop frozen packets instantly
+      if (rawNetworkDelay > 0.800 || rawNetworkDelay < -0.100) return; 
       const networkDelay = Math.max(0, rawNetworkDelay);       
       const trueHostTime = currentTime + networkDelay;
 
-      // BUG 1 FIX: Calculate exact audio position tracking past playbackRate shifts
       const now = actxRef.current.currentTime;
       const delta = now - (stateRef.current.lastHeartbeatTime || now);
       stateRef.current.lastHeartbeatTime = now;
@@ -518,35 +569,16 @@ export default function useHushPodEngine() {
       setIsSyncing(true); await initSystem();
       socketRef.current.emit('join-room', { code: codeInput, name: uname, claimHost: false }, (res) => {
         if (res.error) { setIsSyncing(false); return toast(res.error, 'err'); }
-        if (res.members && res.members.length > 15) {
-             setIsSyncing(false); socketRef.current.disconnect(); socketRef.current = null;
-             sessionStorage.removeItem('hushpod_session'); return toast('Room is full (Max 15 people)!', 'err');
-        }
         sessionStorage.setItem('hushpod_session', JSON.stringify({ code: codeInput, name: uname }));
         setRoomCode(codeInput); setMembers(res.members); setQueue(res.queue);
         setGuestUploads(res.guestUploads); setGlobalVolume(res.globalVolume); setOrbitActive(res.orbitActive || false);
         if(res.currentSong) {
           setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
-          guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true);
+          guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true, res.currentSong.songId, ++loadSessionId.current);
         }
         setIsSyncing(false); setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
       });
     }
-  };
-
-  const togglePlay = () => {
-    if (!amHost) return;
-    const s = stateRef.current;
-    let cur = s.localPlayState ? s.songOffset + (actxRef.current.currentTime - s.nodeStartTime) : s.songOffset;
-    if (!s.localPlayState) { socketRef.current.emit('schedule-play', { currentTime: cur }); }
-    else { socketRef.current.emit('playstate', { playing: false, currentTime: cur, ts: sNow() }); applyPlayState(false, cur, sNow(), false); }
-  };
-
-  const seekClick = (e) => {
-    if (!amHost || !audioBufferRef.current) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    const percent = (e.clientX - r.left) / r.width;
-    handleSeek(Math.max(0, Math.min(audioBufferRef.current.duration, percent * audioBufferRef.current.duration)));
   };
 
   const uploadSongs = (files) => {
@@ -587,10 +619,10 @@ export default function useHushPodEngine() {
     uname, setUname, roomCode, isSyncing, codeInput, setCodeInput, members,
     queue, setQueue, chat, currentSong, syncState, isPlaying, trackReady,
     guestUploads, setGuestUploads, globalVolume, handleGlobalVolume, orbitActive,
-    isLooping, setIsLooping, isShuffle, setIsShuffle, draggedIdx, setDraggedIdx,
+    loopMode, toggleLoopMode, isShuffle, setIsShuffle, draggedIdx, setDraggedIdx,
     tosChecked, setTosChecked, socketRef, actxRef, audioBufferRef, progFillRef, tCurRef,
     stateRef, fmt, seekClick, handleSeek, togglePlay, uploadSongs, handleDrop,
     attemptCreateRoom, attemptJoinRoom, confirmTosAndExecute, runSonarCalibration,
-    amHost, roomTitle
+    amHost, roomTitle, playNext, playPrev
   };
 }
