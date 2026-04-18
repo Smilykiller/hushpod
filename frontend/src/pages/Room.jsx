@@ -6,7 +6,7 @@ import DJDesk from '../components/DJDesk';
 import ListenerList from '../components/ListenerList';
 import ChatBox from '../components/ChatBox';
 import RoomSettings from '../components/RoomSettings';
-import OrbitRadar from '../components/OrbitRadar';
+import LabsTab from '../components/LabsTab';
 
 export default function Room({
   roomTitle, roomCode, modals, setModals, socketRef, roomTab, setRoomTab, amHost,
@@ -104,16 +104,12 @@ export default function Room({
           </div>
 
           <div style={{ display: roomTab === 'orbit' ? 'block' : 'none' }}>
-            <OrbitRadar 
-              outLat={stateRef.current?.outLat} 
-              runSonarCalibration={runSonarCalibration} 
-              amHost={amHost} 
-              orbitActive={orbitActive} 
-              onToggleOrbit={() => socketRef.current.emit('set-orbit', {active: !orbitActive})}
-              members={members} 
-              currentUserId={socketRef.current?.id} 
-              clockOff={stateRef.current?.clockOff || 0}
-            />
+            {/* We pass the ENTIRE engine object in as one clean prop! */}
+            <LabsTab engine={{
+              amHost, queue, currentSong, isPlaying, musicalChairActive, 
+              toggleMusicalChairs, playNext, playPrev, togglePlay, 
+              stateRef, runSonarCalibration, orbitActive, members, socketRef 
+            }} />
           </div>
 
         </div>

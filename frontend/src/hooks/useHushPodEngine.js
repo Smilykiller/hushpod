@@ -38,6 +38,8 @@ export default function useHushPodEngine() {
   const [isShuffle, setIsShuffle] = useState(false);
   const [draggedIdx, setDraggedIdx] = useState(null);
 
+  const [musicalChairActive, setMusicalChairActive] = useState(false);
+  const musicalChairTimer = useRef(null);
   // NEW: 3-State Loop (none, queue, song)
   const [loopMode, setLoopMode] = useState('none');
 
@@ -142,6 +144,64 @@ export default function useHushPodEngine() {
     if (session) {
       const { code, name } = JSON.parse(session);
       setUname(name); setCodeInput(code);
+      // --- LABS: ORBIT SPATIAL AUDIO MATH ---
+  useEffect(() => {
+    let raf;
+    const runOrbitAudio = () => {
+      raf = requestAnimationFrame(runOrbitAudio);
+      if (stateRef.current.orbitActive && stateRef.current.localPlayState && pannerNodeRef.current && gainNodeRef.current) {
+        const total = stateRef.current.members.length || 1;
+        const speedMs = Math.max(3000, Math.min(10000, 2000 * total));
+        const globalTime = Date.now() + stateRef.current.clockOff;
+        const radarAngle = ((globalTime % speedMs) / speedMs) * Math.PI * 2;
+
+        const myIndex = stateRef.current.members.findIndex(m => m.id === socketRef.current.id);
+        const myAngle = ((myIndex === -1 ? 0 : myIndex) / total) * Math.PI * 2;
+
+        // Calculate distance from the sweeping radar beam
+        let diff = radarAngle - myAngle;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+
+        // 1. Spatial Pan: Sound moves left to right as the beam passes
+        if (pannerNodeRef.current.pan) pannerNodeRef.current.pan.value = Math.sin(diff);
+
+        // 2. Spatial Volume: Drops to 15% when the beam is on the opposite side of the room
+        const dist = Math.abs(diff);
+        const volDrop = Math.max(0.15, 1.0 - (dist / Math.PI));
+        gainNodeRef.current.gain.value = stateRef.current.globalVolume * volDrop;
+      } else if (pannerNodeRef.current && gainNodeRef.current) {
+        // Reset to normal flat audio when Orbit is turned off
+        if (pannerNodeRef.current.pan) pannerNodeRef.current.pan.value = 0;
+        gainNodeRef.current.gain.value = stateRef.current.globalVolume;
+      }
+    };
+    runOrbitAudio();
+    return () => cancelAnimationFrame(raf);
+  }, [orbitActive, members]);
+
+  // --- LABS: MUSICAL CHAIRS LOGIC ---
+  const toggleMusicalChairs = () => {
+    if (!amHost) return;
+    if (musicalChairActive) {
+      clearTimeout(musicalChairTimer.current);
+      setMusicalChairActive(false);
+      if (stateRef.current.localPlayState) togglePlay(); // Pause if manually stopped
+    } else {
+      setMusicalChairActive(true);
+      if (!stateRef.current.localPlayState) togglePlay(); // Start playing
+      
+      // Pick a random time between 5 and 15 seconds
+      const randomTimeMs = Math.floor(Math.random() * 10000) + 5000;
+      toast(`Musical Chairs started! Stopping in ${(randomTimeMs/1000).toFixed(1)}s...`, "inf");
+      
+      musicalChairTimer.current = setTimeout(() => {
+        setMusicalChairActive(false);
+        togglePlay(); // Auto-Cut the music!
+        toast("🛑 MUSIC STOPPED! Find a chair!", "ok");
+      }, randomTimeMs);
+    }
+  };
       initSystem().then(() => {
         socketRef.current.emit('join-room', { code, name, claimHost: false }, (res) => {
           if (res.error) { sessionStorage.removeItem('hushpod_session'); setIsSyncing(false); return toast(res.error, 'err'); }
@@ -272,9 +332,13 @@ export default function useHushPodEngine() {
       const s = stateRef.current;
       if (s.localPlayState && !s.isTransitioning && actxRef.current.currentTime >= s.nodeStartTime + audioBufferRef.current.duration - s.songOffset - 0.1) {
         s.isTransitioning = true;
-        playNext(false); // Natural end of song
+        playNext(false); 
       }
     };
+    
+    // THE AUTO-PLAY FIX: Force the OS hardware to wake up from background sleep!
+    if (actxRef.current.state === 'suspended') actxRef.current.resume();
+    
     sourceNodeRef.current.start(actxTime, songTime);
     stateRef.current.songOffset = songTime; stateRef.current.nodeStartTime = actxTime;
     stateRef.current.localPlayState = true; setIsPlaying(true); drawVisualizer();
@@ -498,14 +562,19 @@ export default function useHushPodEngine() {
     });
     
     sock.on('heartbeat', ({ currentTime, ts }) => {
+      // 1. Bail out if we don't need to sync
       if (stateRef.current.amHost || !audioBufferRef.current || !stateRef.current.localPlayState) return;
+      
       const outLat = stateRef.current.outLat || 0.050; 
       
+      // 2. Tab-Switch Armor: Drop frozen packets instantly
       const rawNetworkDelay = (sNow() - ts) / 1000;
       if (rawNetworkDelay > 0.800 || rawNetworkDelay < -0.100) return; 
       const networkDelay = Math.max(0, rawNetworkDelay);       
+      
       const trueHostTime = currentTime + networkDelay;
 
+      // 3. Calculate EXACT audio position tracking past playbackRate shifts
       const now = actxRef.current.currentTime;
       const delta = now - (stateRef.current.lastHeartbeatTime || now);
       stateRef.current.lastHeartbeatTime = now;
@@ -515,15 +584,31 @@ export default function useHushPodEngine() {
       }
 
       const myActualTime = stateRef.current.songOffset + (now - stateRef.current.nodeStartTime) + stateRef.current.accumulatedRateDrift - outLat;
+      
+      // 4. Calculate drift
       const drift = trueHostTime - myActualTime;
       const absDrift = Math.abs(drift);
 
-      if (absDrift > 0.150) applyPlayState(true, trueHostTime + outLat, sNow(), false);
-      else if (absDrift > 0.015 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.006 : 0.994;
+      // --- 5. UPGRADED SMOOTH PHASE-COHERENCE ENGINE ---
+      
+      // TIER 1: MAJOR DESYNC (> 250ms)
+      // The network choked or the tab was frozen. Snap back instantly.
+      if (absDrift > 0.250) {
+          applyPlayState(true, trueHostTime + outLat, sNow(), false);
+      }
+      
+      // TIER 2: THE MICRO-SLIP (40ms to 250ms)
+      // We apply a smooth, gentle 1.5% speed change to fix Wi-Fi drift
+      else if (absDrift > 0.040 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
+          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.015 : 0.985;
       } 
+      
+      // TIER 3: THE HAAS DEADZONE (< 40ms)
+      // Widened deadzone. Do not touch the pitch. Pure, lossless audio quality.
       else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          if (sourceNodeRef.current.playbackRate.value !== 1.0) sourceNodeRef.current.playbackRate.value = 1.0;
+          if (sourceNodeRef.current.playbackRate.value !== 1.0) {
+              sourceNodeRef.current.playbackRate.value = 1.0;
+          }
       }
     });
 
