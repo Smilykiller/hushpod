@@ -63,10 +63,12 @@ export default function useHushPodEngine() {
   const vizRafRef = useRef(null);
   const toastTmr = useRef(null);
   const musicalChairTimer = useRef(null);
+  const keepAliveRef = useRef(null);
+  const sleepArmorTmr = useRef(null);
 
   // The master state ref for the audio engine math
   const stateRef = useRef({ 
-    clockOff: 0, 
+    clockOff: 0,
     songOffset: 0, 
     nodeStartTime: 0, 
     localPlayState: false, 
@@ -82,6 +84,7 @@ export default function useHushPodEngine() {
     accumulatedRateDrift: 0, 
     lastHeartbeatTime: 0, 
     isTransitioning: false, 
+    isTransitioningOS: false, // NEW: Tracks the Sleep Wobble
     outLat: 0.050
   });
   
@@ -173,9 +176,17 @@ export default function useHushPodEngine() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 5. TAB VISIBILITY SYNC RESTORE
+  // 5. SLEEP ARMOR: Protects audio when screen turns on/off
   useEffect(() => {
     const handleVisibilityChange = () => {
+      stateRef.current.isTransitioningOS = true;
+      clearTimeout(sleepArmorTmr.current);
+      
+      // Ignore drift math completely for 3 seconds while the OS throttles the CPU
+      sleepArmorTmr.current = setTimeout(() => {
+        stateRef.current.isTransitioningOS = false;
+      }, 3000);
+
       if (!document.hidden && socketRef.current && !stateRef.current.amHost) {
         syncClock().then(() => toast("Tab resumed: Re-locking sync...", "inf"));
       }
@@ -337,10 +348,13 @@ export default function useHushPodEngine() {
     
     if (actxRef.current.state === 'suspended') actxRef.current.resume();
     
-    const silentWav = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
-    const bgKeepAlive = new Audio(silentWav); 
-    bgKeepAlive.loop = true; 
-    bgKeepAlive.play().catch(() => {});
+    // KEEP-ALIVE FIX: Saved to ref so Garbage Collector doesn't delete it
+    if (!keepAliveRef.current) {
+      const silentWav = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+      keepAliveRef.current = new Audio(silentWav); 
+      keepAliveRef.current.loop = true; 
+      keepAliveRef.current.play().catch(() => {});
+    }
     
     await syncClock();
     
@@ -711,6 +725,9 @@ export default function useHushPodEngine() {
       const myActualTime = stateRef.current.songOffset + (now - stateRef.current.nodeStartTime) + stateRef.current.accumulatedRateDrift - outLat;
       const drift = trueHostTime - myActualTime;
       const absDrift = Math.abs(drift);
+
+      // SLEEP ARMOR: If OS is throttling CPU, ignore lag completely to prevent audio corruption
+      if (stateRef.current.isTransitioningOS) return;
 
       // Widened deadzone to 40ms to prevent Wi-Fi stuttering
       if (absDrift > 0.250) {
