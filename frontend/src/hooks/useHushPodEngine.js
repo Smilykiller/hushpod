@@ -14,6 +14,7 @@ export default function useHushPodEngine() {
     else if (viewName === 'room') navigate('/room');
   };
 
+  // --- STATE DECLARED HERE ---
   const [toastData, setToastData] = useState({ msg: '', type: 'inf', visible: false });
   const [modals, setModals] = useState({ qr: false, tos: false });
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -22,12 +23,13 @@ export default function useHushPodEngine() {
   const [uname, setUname] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [isSyncing, setIsSyncing] = useState(true);
-  
   const [codeInput, setCodeInput] = useState('');
+  
   const [members, setMembers] = useState([]);
   const [queue, setQueue] = useState([]);
   const [chat, setChat] = useState([]);
   const [currentSong, setCurrentSong] = useState(null);
+  
   const [syncState, setSyncState] = useState({ state: 'syncing', label: 'Waiting for host...' });
   const [isPlaying, setIsPlaying] = useState(false);
   const [trackReady, setTrackReady] = useState(true);
@@ -37,15 +39,14 @@ export default function useHushPodEngine() {
   const [orbitActive, setOrbitActive] = useState(false);
   const [isShuffle, setIsShuffle] = useState(false);
   const [draggedIdx, setDraggedIdx] = useState(null);
-
+  
   const [musicalChairActive, setMusicalChairActive] = useState(false);
-  const musicalChairTimer = useRef(null);
-  // NEW: 3-State Loop (none, queue, song)
   const [loopMode, setLoopMode] = useState('none');
 
   const [tosChecked, setTosChecked] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
 
+  // --- REFS DECLARED HERE ---
   const socketRef = useRef(null);
   const actxRef = useRef(null);
   const audioBufferRef = useRef(null);
@@ -56,20 +57,35 @@ export default function useHushPodEngine() {
   const trackCacheRef = useRef({}); 
   
   const loadSessionId = useRef(0);
-  
-  const stateRef = useRef({ 
-    clockOff: 0, songOffset: 0, nodeStartTime: 0, localPlayState: false, amHost: false, 
-    queue: [], loopMode: 'none', shuffle: false, currentSongId: null, uname: '', members: [], 
-    globalVolume: 1.0, orbitActive: false, accumulatedRateDrift: 0, lastHeartbeatTime: 0, 
-    isTransitioning: false 
-  });
-  
   const progFillRef = useRef(null);
   const tCurRef = useRef(null);
   const chatBoxRef = useRef(null);
   const vizRafRef = useRef(null);
   const toastTmr = useRef(null);
+  const musicalChairTimer = useRef(null);
 
+  // The master state ref for the audio engine math
+  const stateRef = useRef({ 
+    clockOff: 0, 
+    songOffset: 0, 
+    nodeStartTime: 0, 
+    localPlayState: false, 
+    amHost: false, 
+    queue: [], 
+    loopMode: 'none', 
+    shuffle: false, 
+    currentSongId: null, 
+    uname: '', 
+    members: [], 
+    globalVolume: 1.0, 
+    orbitActive: false, 
+    accumulatedRateDrift: 0, 
+    lastHeartbeatTime: 0, 
+    isTransitioning: false, 
+    outLat: 0.050
+  });
+  
+  // --- HELPERS ---
   const toast = (msg, type = 'inf') => {
     setToastData({ msg, type, visible: true });
     clearTimeout(toastTmr.current);
@@ -80,12 +96,26 @@ export default function useHushPodEngine() {
   const amHost = myMemberData ? myMemberData.isHost : false;
   const currentHost = members.find(m => m.isHost);
   const roomTitle = currentHost ? `${currentHost.name}'s Party` : 'ROOM';
+  
+  const fmt = (s) => { 
+    if (!s || isNaN(s)) return '0:00'; 
+    return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0'); 
+  };
+  
+  const sNow = () => Date.now() + stateRef.current.clockOff;
 
+
+  // ==========================================
+  // USE EFFECTS (All hooks must stay at top level)
+  // ==========================================
+
+  // 1. WAKE LOCK API (Prevents screen-off audio death)
   useEffect(() => {
     let wakeLock = null;
     const requestWakeLock = async () => {
-      try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } 
-      catch (err) {}
+      try { 
+        if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); 
+      } catch (err) {}
     };
     requestWakeLock();
     const handleVis = () => { if (document.visibilityState === 'visible') requestWakeLock(); };
@@ -93,9 +123,10 @@ export default function useHushPodEngine() {
     return () => document.removeEventListener('visibilitychange', handleVis);
   }, []);
 
+  // 2. STATE REF SYNC
   useEffect(() => {
     stateRef.current.queue = queue;
-    stateRef.current.loopMode = loopMode; // Updated to 3-state
+    stateRef.current.loopMode = loopMode;
     stateRef.current.shuffle = isShuffle;
     stateRef.current.currentSongId = currentSong?.id;
     stateRef.current.uname = uname;
@@ -105,13 +136,20 @@ export default function useHushPodEngine() {
     stateRef.current.orbitActive = orbitActive;
   }, [queue, loopMode, isShuffle, currentSong, uname, amHost, members, globalVolume, orbitActive]);
 
+  // 3. BROWSER AUDIO UNLOCK
   useEffect(() => {
-    const unlockAudio = () => { if (actxRef.current && actxRef.current.state === 'suspended') actxRef.current.resume(); };
+    const unlockAudio = () => { 
+      if (actxRef.current && actxRef.current.state === 'suspended') actxRef.current.resume(); 
+    };
     window.addEventListener('click', unlockAudio);
     window.addEventListener('touchstart', unlockAudio);
-    return () => { window.removeEventListener('click', unlockAudio); window.removeEventListener('touchstart', unlockAudio); };
+    return () => { 
+      window.removeEventListener('click', unlockAudio); 
+      window.removeEventListener('touchstart', unlockAudio); 
+    };
   }, []);
 
+  // 4. DEVICE HARDWARE CHANGE DETECTION
   useEffect(() => {
     const handleDeviceChange = () => {
       if (stateRef.current.isCalibrated) {
@@ -124,11 +162,18 @@ export default function useHushPodEngine() {
         }
       }
     };
-    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
-    return () => { if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener) navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange); };
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    }
+    return () => { 
+      if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
+        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange); 
+      }
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 5. TAB VISIBILITY SYNC RESTORE
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (!document.hidden && socketRef.current && !stateRef.current.amHost) {
@@ -137,14 +182,10 @@ export default function useHushPodEngine() {
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    const session = sessionStorage.getItem('hushpod_session');
-    if (session) {
-      const { code, name } = JSON.parse(session);
-      setUname(name); setCodeInput(code);
-      // --- LABS: ORBIT SPATIAL AUDIO MATH ---
+  // 6. ORBIT 3D SPATIAL AUDIO MATH
   useEffect(() => {
     let raf;
     const runOrbitAudio = () => {
@@ -158,20 +199,16 @@ export default function useHushPodEngine() {
         const myIndex = stateRef.current.members.findIndex(m => m.id === socketRef.current.id);
         const myAngle = ((myIndex === -1 ? 0 : myIndex) / total) * Math.PI * 2;
 
-        // Calculate distance from the sweeping radar beam
         let diff = radarAngle - myAngle;
         while (diff < -Math.PI) diff += Math.PI * 2;
         while (diff > Math.PI) diff -= Math.PI * 2;
 
-        // 1. Spatial Pan: Sound moves left to right as the beam passes
         if (pannerNodeRef.current.pan) pannerNodeRef.current.pan.value = Math.sin(diff);
 
-        // 2. Spatial Volume: Drops to 15% when the beam is on the opposite side of the room
         const dist = Math.abs(diff);
         const volDrop = Math.max(0.15, 1.0 - (dist / Math.PI));
         gainNodeRef.current.gain.value = stateRef.current.globalVolume * volDrop;
       } else if (pannerNodeRef.current && gainNodeRef.current) {
-        // Reset to normal flat audio when Orbit is turned off
         if (pannerNodeRef.current.pan) pannerNodeRef.current.pan.value = 0;
         gainNodeRef.current.gain.value = stateRef.current.globalVolume;
       }
@@ -180,38 +217,34 @@ export default function useHushPodEngine() {
     return () => cancelAnimationFrame(raf);
   }, [orbitActive, members]);
 
-  // --- LABS: MUSICAL CHAIRS LOGIC ---
-  const toggleMusicalChairs = () => {
-    if (!amHost) return;
-    if (musicalChairActive) {
-      clearTimeout(musicalChairTimer.current);
-      setMusicalChairActive(false);
-      if (stateRef.current.localPlayState) togglePlay(); // Pause if manually stopped
-    } else {
-      setMusicalChairActive(true);
-      if (!stateRef.current.localPlayState) togglePlay(); // Start playing
-      
-      // Pick a random time between 5 and 15 seconds
-      const randomTimeMs = Math.floor(Math.random() * 10000) + 5000;
-      toast(`Musical Chairs started! Stopping in ${(randomTimeMs/1000).toFixed(1)}s...`, "inf");
-      
-      musicalChairTimer.current = setTimeout(() => {
-        setMusicalChairActive(false);
-        togglePlay(); // Auto-Cut the music!
-        toast("🛑 MUSIC STOPPED! Find a chair!", "ok");
-      }, randomTimeMs);
-    }
-  };
+  // 7. SESSION RESTORE & AUTO-JOIN
+  useEffect(() => {
+    const session = sessionStorage.getItem('hushpod_session');
+    if (session) {
+      const { code, name } = JSON.parse(session);
+      setUname(name); 
+      setCodeInput(code);
       initSystem().then(() => {
         socketRef.current.emit('join-room', { code, name, claimHost: false }, (res) => {
-          if (res.error) { sessionStorage.removeItem('hushpod_session'); setIsSyncing(false); return toast(res.error, 'err'); }
-          setRoomCode(code); setMembers(res.members); setQueue(res.queue);
-          setGuestUploads(res.guestUploads); setGlobalVolume(res.globalVolume); setOrbitActive(res.orbitActive || false);
+          if (res.error) { 
+            sessionStorage.removeItem('hushpod_session'); 
+            setIsSyncing(false); 
+            return toast(res.error, 'err'); 
+          }
+          setRoomCode(code); 
+          setMembers(res.members); 
+          setQueue(res.queue);
+          setGuestUploads(res.guestUploads); 
+          setGlobalVolume(res.globalVolume); 
+          setOrbitActive(res.orbitActive || false);
+          
           if(res.currentSong) {
             setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
             guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true, res.currentSong.songId, ++loadSessionId.current);
           }
-          setIsSyncing(false); setRoomTab('dj'); setView('room');
+          setIsSyncing(false); 
+          setRoomTab('dj'); 
+          setView('room');
         });
       });
     } else {
@@ -220,17 +253,20 @@ export default function useHushPodEngine() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 8. QR URL PARSER
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const roomFromUrl = params.get('room');
     if (roomFromUrl) {
-      setCodeInput(roomFromUrl.toUpperCase()); setView('app-entry');
+      setCodeInput(roomFromUrl.toUpperCase()); 
+      setView('app-entry');
       toast(`Scanned! Enter your name to join room ${roomFromUrl.toUpperCase()}`, 'ok');
       window.history.replaceState({}, document.title, window.location.pathname);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 9. BACKGROUND WEB WORKER ENGINE (Maintains timing when app is minimized)
   useEffect(() => {
     if (location.pathname !== '/room') return;
     const workerBlob = new Blob([`
@@ -239,7 +275,9 @@ export default function useHushPodEngine() {
         if (e.data === 'start') {
           tick1 = setInterval(() => self.postMessage('heartbeat'), 1000);
           tick2 = setInterval(() => self.postMessage('clocksync'), 20000);
-        } else if (e.data === 'stop') { clearInterval(tick1); clearInterval(tick2); }
+        } else if (e.data === 'stop') { 
+          clearInterval(tick1); clearInterval(tick2); 
+        }
       };
     `], { type: 'application/javascript' });
 
@@ -259,37 +297,60 @@ export default function useHushPodEngine() {
           const currentAudioPos = Math.max(0, s.songOffset + (now - s.nodeStartTime) + s.accumulatedRateDrift);
           socketRef.current.emit('heartbeat', { currentTime: currentAudioPos });
 
+          // Triggers next song right before the current one finishes
           if (currentAudioPos >= audioBufferRef.current.duration - 0.4 && !s.isTransitioning) {
               s.isTransitioning = true;
-              playNext(false); // Natural end of song
+              playNext(false); 
           }
         }
-      } else if (e.data === 'clocksync') { syncClock(); }
+      } else if (e.data === 'clocksync') { 
+        syncClock(); 
+      }
     };
     worker.postMessage('start');
-    return () => { worker.postMessage('stop'); worker.terminate(); };
+    return () => { 
+      worker.postMessage('stop'); 
+      worker.terminate(); 
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
+
+
+  // ==========================================
+  // CORE FUNCTIONS
+  // ==========================================
 
   const initSystem = async () => {
     if (!actxRef.current) {
       actxRef.current = new (window.AudioContext || window.webkitAudioContext)();
       stateRef.current.outLat = Math.max(0.020, Math.min(0.150, actxRef.current.outputLatency || actxRef.current.baseLatency || 0.060));
+      
       gainNodeRef.current = actxRef.current.createGain();
       pannerNodeRef.current = actxRef.current.createStereoPanner ? actxRef.current.createStereoPanner() : actxRef.current.createGain();
       analyserRef.current = actxRef.current.createAnalyser();
       analyserRef.current.fftSize = 128;
-      pannerNodeRef.current.connect(analyserRef.current); analyserRef.current.connect(gainNodeRef.current); gainNodeRef.current.connect(actxRef.current.destination);
+      
+      pannerNodeRef.current.connect(analyserRef.current); 
+      analyserRef.current.connect(gainNodeRef.current); 
+      gainNodeRef.current.connect(actxRef.current.destination);
     }
+    
     if (actxRef.current.state === 'suspended') actxRef.current.resume();
+    
     const silentWav = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
-    const bgKeepAlive = new Audio(silentWav); bgKeepAlive.loop = true; bgKeepAlive.play().catch(() => {});
+    const bgKeepAlive = new Audio(silentWav); 
+    bgKeepAlive.loop = true; 
+    bgKeepAlive.play().catch(() => {});
+    
     await syncClock();
+    
     if (!socketRef.current) {
       socketRef.current = io(SERVER, { transports: ['websocket', 'polling'] });
       setupSocketListeners(socketRef.current);
       socketRef.current.on('connect', () => {
-         if (stateRef.current.uname && roomCode) socketRef.current.emit('join-room', { code: roomCode, name: stateRef.current.uname, claimHost: false }, () => {});
+         if (stateRef.current.uname && roomCode) {
+           socketRef.current.emit('join-room', { code: roomCode, name: stateRef.current.uname, claimHost: false }, () => {});
+         }
       });
     }
   };
@@ -298,10 +359,12 @@ export default function useHushPodEngine() {
     const samples = [];
     for (let i = 0; i < 8; i++) {
       try {
-        const ctrl = new AbortController(); const tid = setTimeout(() => ctrl.abort(), 1000);
+        const ctrl = new AbortController(); 
+        const tid = setTimeout(() => ctrl.abort(), 1000);
         const t1 = performance.now();
         const r = await fetch(SERVER + '/clocksync', { cache: 'no-store', signal: ctrl.signal });
-        const t4 = performance.now(); clearTimeout(tid);
+        const t4 = performance.now(); 
+        clearTimeout(tid);
         const { t } = await r.json(); 
         if ((t4 - t1) < 150) samples.push({ offset: t + ((t4 - t1) / 2) - Date.now(), rtt: t4 - t1 });
       } catch {}
@@ -314,16 +377,21 @@ export default function useHushPodEngine() {
     }
   };
 
-  const fmt = (s) => { if (!s || isNaN(s)) return '0:00'; return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0'); };
-  const sNow = () => Date.now() + stateRef.current.clockOff;
-
   const stopAudio = () => {
-    if (sourceNodeRef.current) { try { sourceNodeRef.current.stop(); } catch(e) {} sourceNodeRef.current.disconnect(); sourceNodeRef.current = null; }
-    stateRef.current.localPlayState = false; setIsPlaying(false); cancelAnimationFrame(vizRafRef.current);
+    if (sourceNodeRef.current) { 
+      try { sourceNodeRef.current.stop(); } catch(e) {} 
+      sourceNodeRef.current.disconnect(); 
+      sourceNodeRef.current = null; 
+    }
+    stateRef.current.localPlayState = false; 
+    setIsPlaying(false); 
+    cancelAnimationFrame(vizRafRef.current);
   };
 
   const playAudioAt = (songTime, actxTime) => {
-    stopAudio(); if (!audioBufferRef.current) return;
+    stopAudio(); 
+    if (!audioBufferRef.current) return;
+    
     sourceNodeRef.current = actxRef.current.createBufferSource();
     sourceNodeRef.current.buffer = audioBufferRef.current;
     sourceNodeRef.current.connect(pannerNodeRef.current);
@@ -336,12 +404,15 @@ export default function useHushPodEngine() {
       }
     };
     
-    // THE AUTO-PLAY FIX: Force the OS hardware to wake up from background sleep!
+    // Wakes OS hardware up from background sleep
     if (actxRef.current.state === 'suspended') actxRef.current.resume();
     
     sourceNodeRef.current.start(actxTime, songTime);
-    stateRef.current.songOffset = songTime; stateRef.current.nodeStartTime = actxTime;
-    stateRef.current.localPlayState = true; setIsPlaying(true); drawVisualizer();
+    stateRef.current.songOffset = songTime; 
+    stateRef.current.nodeStartTime = actxTime;
+    stateRef.current.localPlayState = true; 
+    setIsPlaying(true); 
+    drawVisualizer();
   };
 
   const prefetchQueue = async (q) => {
@@ -363,10 +434,11 @@ export default function useHushPodEngine() {
       if (songId && trackCacheRef.current[songId] && trackCacheRef.current[songId] !== 'fetching') {
         audioBufferRef.current = trackCacheRef.current[songId]; 
         if (expectedLoadId !== loadSessionId.current) return; 
-        setTrackReady(true); applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
+        
+        setTrackReady(true); 
+        applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       } else {
         if (!audioBufferRef.current) setTrackReady(false); 
-        
         if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Buffering next...' });
         if (songId) trackCacheRef.current[songId] = 'fetching';
         
@@ -378,11 +450,13 @@ export default function useHushPodEngine() {
         audioBufferRef.current = decoded;
         if (songId) trackCacheRef.current[songId] = audioBufferRef.current; 
         
-        setTrackReady(true); applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
+        setTrackReady(true); 
+        applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       }
     } catch(e) { 
       if (expectedLoadId !== loadSessionId.current) return;
-      setTrackReady(true); if (!stateRef.current.amHost) setSyncState({ state: 'fixing', label: 'Error loading track' }); 
+      setTrackReady(true); 
+      if (!stateRef.current.amHost) setSyncState({ state: 'fixing', label: 'Error loading track' }); 
     }
   };
 
@@ -392,7 +466,8 @@ export default function useHushPodEngine() {
     const elapsed = (Date.now() + stateRef.current.clockOff - ts) / 1000;
     
     if (!playing) { 
-      stopAudio(); stateRef.current.songOffset = currentTime; 
+      stopAudio(); 
+      stateRef.current.songOffset = currentTime; 
       if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Paused' });
       return; 
     }
@@ -405,7 +480,10 @@ export default function useHushPodEngine() {
     const hardwareWarmup = 0.100; 
     let startTime = actxRef.current.currentTime + hardwareWarmup;
 
-    if (expectedOffset < 0) { startTime = actxRef.current.currentTime + Math.abs(expectedOffset); expectedOffset = 0; }
+    if (expectedOffset < 0) { 
+      startTime = actxRef.current.currentTime + Math.abs(expectedOffset); 
+      expectedOffset = 0; 
+    }
     
     if (isNewJoiner && !stateRef.current.amHost && expectedOffset > 0) {
         expectedOffset += hardwareWarmup; 
@@ -414,23 +492,28 @@ export default function useHushPodEngine() {
         if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Locked Sync' });
     }
 
-    if (expectedOffset >= audioBufferRef.current.duration) { stopAudio(); return; }
+    if (expectedOffset >= audioBufferRef.current.duration) { 
+      stopAudio(); 
+      return; 
+    }
     playAudioAt(expectedOffset, startTime);
   };
 
-  // --- NEW: Toggle 3-State Loop ---
+
+  // ==========================================
+  // CONTROLS & INTERACTION
+  // ==========================================
+
   const toggleLoopMode = () => {
     setLoopMode(prev => prev === 'none' ? 'queue' : prev === 'queue' ? 'song' : 'none');
   };
 
-  // --- UPDATED: Smart Next / Prev Logic ---
   const playNext = (isManualClick = false) => {
     if (!stateRef.current.amHost) return;
     const s = stateRef.current;
     const q = s.queue;
     if (q.length === 0) return;
 
-    // If the song naturally ended and we are on "Repeat Song", replay it instantly
     if (!isManualClick && s.loopMode === 'song') {
       socketRef.current.emit('play-song', { songId: s.currentSongId, autoPlay: true });
       return;
@@ -443,10 +526,10 @@ export default function useHushPodEngine() {
       if (idx !== -1 && idx < q.length - 1) {
         socketRef.current.emit('play-song', { songId: q[idx + 1].id, autoPlay: true });
       } else if (s.loopMode === 'queue' || s.loopMode === 'song') {
-        // We reached the end of the list. If looping is active, go back to song 1
         socketRef.current.emit('play-song', { songId: q[0].id, autoPlay: true });
       } else {
-        socketRef.current.emit('song-ended', {}); setCurrentSong(null);
+        socketRef.current.emit('song-ended', {}); 
+        setCurrentSong(null);
       }
     }
   };
@@ -469,8 +552,13 @@ export default function useHushPodEngine() {
     if (!amHost) return;
     const s = stateRef.current;
     let cur = s.localPlayState ? s.songOffset + (actxRef.current.currentTime - s.nodeStartTime) : s.songOffset;
-    if (!s.localPlayState) { socketRef.current.emit('schedule-play', { currentTime: cur }); }
-    else { socketRef.current.emit('playstate', { playing: false, currentTime: cur, ts: sNow() }); applyPlayState(false, cur, sNow(), false); }
+    
+    if (!s.localPlayState) { 
+      socketRef.current.emit('schedule-play', { currentTime: cur }); 
+    } else { 
+      socketRef.current.emit('playstate', { playing: false, currentTime: cur, ts: sNow() }); 
+      applyPlayState(false, cur, sNow(), false); 
+    }
   };
 
   const seekClick = (e) => {
@@ -491,21 +579,53 @@ export default function useHushPodEngine() {
     vizRafRef.current = requestAnimationFrame(drawVisualizer);
     
     const cvs = document.getElementById('viz-canvas');
-    if(!cvs) return; const ctx = cvs.getContext('2d'); if(!ctx) return;
-    const W = cvs.width = cvs.offsetWidth; const H = cvs.height = cvs.offsetHeight;
+    if(!cvs) return; 
+    
+    const ctx = cvs.getContext('2d'); 
+    if(!ctx) return;
+    
+    const W = cvs.width = cvs.offsetWidth; 
+    const H = cvs.height = cvs.offsetHeight;
+    
     const data = new Uint8Array(analyserRef.current.frequencyBinCount);
-    analyserRef.current.getByteFrequencyData(data); ctx.clearRect(0, 0, W, H);
+    analyserRef.current.getByteFrequencyData(data); 
+    ctx.clearRect(0, 0, W, H);
     
     const pColor = getComputedStyle(document.body).getPropertyValue('--cyan').trim() || '#4cc9f0';
-    const bw = (W / data.length) * 2.5; let x = 0;
+    const bw = (W / data.length) * 2.5; 
+    let x = 0;
+    
     for(let i=0; i<data.length; i++) {
       const bh = (data[i] / 255) * H;
-      ctx.fillStyle = pColor; ctx.fillRect(x, H - bh, bw, bh); x += bw + 1;
+      ctx.fillStyle = pColor; 
+      ctx.fillRect(x, H - bh, bw, bh); 
+      x += bw + 1;
     }
     
     let currentPos = Math.max(0, Math.min(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime), audioBufferRef.current?.duration || 1));
     if (progFillRef.current) progFillRef.current.style.width = (currentPos / (audioBufferRef.current?.duration || 1) * 100) + '%';
     if (tCurRef.current) tCurRef.current.textContent = fmt(currentPos);
+  };
+
+  const toggleMusicalChairs = () => {
+    if (!amHost) return;
+    if (musicalChairActive) {
+      clearTimeout(musicalChairTimer.current);
+      setMusicalChairActive(false);
+      if (stateRef.current.localPlayState) togglePlay(); 
+    } else {
+      setMusicalChairActive(true);
+      if (!stateRef.current.localPlayState) togglePlay(); 
+      
+      const randomTimeMs = Math.floor(Math.random() * 10000) + 5000;
+      toast(`Party Roulette started! Stopping in ${(randomTimeMs/1000).toFixed(1)}s...`, "inf");
+      
+      musicalChairTimer.current = setTimeout(() => {
+        setMusicalChairActive(false);
+        togglePlay(); 
+        toast("🛑 MUSIC STOPPED!", "ok");
+      }, randomTimeMs);
+    }
   };
 
   const runSonarCalibration = async () => {
@@ -528,19 +648,27 @@ export default function useHushPodEngine() {
       clickGain.gain.linearRampToValueAtTime(0, actxRef.current.currentTime + 0.010);
       
       osc.connect(clickGain); clickGain.connect(actxRef.current.destination);
-      osc.start(); osc.stop(actxRef.current.currentTime + 0.02);
+      osc.start(); 
+      osc.stop(actxRef.current.currentTime + 0.02);
 
       const checkMic = () => {
         micAnalyser.getByteFrequencyData(dataArray);
-        let volume = 0; for (let i = 0; i < bufferLength; i++) if (dataArray[i] > volume) volume = dataArray[i];
+        let volume = 0; 
+        for (let i = 0; i < bufferLength; i++) {
+          if (dataArray[i] > volume) volume = dataArray[i];
+        }
 
         if (volume > 180) { 
           const latencySec = (performance.now() - startTime) / 1000;
           stateRef.current.outLat = Math.max(0.010, Math.min(0.600, latencySec));
           toast(`Sync Locked: ${(latencySec * 1000).toFixed(0)}ms latency detected`, "ok");
           stream.getTracks().forEach(t => t.stop());
-        } else if (performance.now() - startTime < 2000) requestAnimationFrame(checkMic);
-        else { toast("Calibration failed. Turn up the volume and try again.", "err"); stream.getTracks().forEach(t => t.stop()); }
+        } else if (performance.now() - startTime < 2000) {
+          requestAnimationFrame(checkMic);
+        } else { 
+          toast("Calibration failed. Turn up the volume and try again.", "err"); 
+          stream.getTracks().forEach(t => t.stop()); 
+        }
       };
       checkMic();
     } catch (err) { toast("Microphone access is required for Sonar Calibration.", "err"); }
@@ -553,28 +681,25 @@ export default function useHushPodEngine() {
       setCurrentSong({ id: songId, name, duration: 0 });
       guestLoadAndSync(SERVER + streamUrl, playState, !stateRef.current.amHost, songId, currentLoadId);
     });
+    
     sock.on('play-scheduled', ({ currentTime, targetTs }) => {
       if(!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Readying...' });
       applyPlayState(true, currentTime, targetTs, false);
     });
+    
     sock.on('playstate', ({ playing, currentTime, ts }) => { 
       if(!stateRef.current.amHost) applyPlayState(playing, currentTime, ts, false); 
     });
     
     sock.on('heartbeat', ({ currentTime, ts }) => {
-      // 1. Bail out if we don't need to sync
       if (stateRef.current.amHost || !audioBufferRef.current || !stateRef.current.localPlayState) return;
-      
       const outLat = stateRef.current.outLat || 0.050; 
       
-      // 2. Tab-Switch Armor: Drop frozen packets instantly
       const rawNetworkDelay = (sNow() - ts) / 1000;
       if (rawNetworkDelay > 0.800 || rawNetworkDelay < -0.100) return; 
       const networkDelay = Math.max(0, rawNetworkDelay);       
       
       const trueHostTime = currentTime + networkDelay;
-
-      // 3. Calculate EXACT audio position tracking past playbackRate shifts
       const now = actxRef.current.currentTime;
       const delta = now - (stateRef.current.lastHeartbeatTime || now);
       stateRef.current.lastHeartbeatTime = now;
@@ -584,31 +709,18 @@ export default function useHushPodEngine() {
       }
 
       const myActualTime = stateRef.current.songOffset + (now - stateRef.current.nodeStartTime) + stateRef.current.accumulatedRateDrift - outLat;
-      
-      // 4. Calculate drift
       const drift = trueHostTime - myActualTime;
       const absDrift = Math.abs(drift);
 
-      // --- 5. UPGRADED SMOOTH PHASE-COHERENCE ENGINE ---
-      
-      // TIER 1: MAJOR DESYNC (> 250ms)
-      // The network choked or the tab was frozen. Snap back instantly.
+      // Widened deadzone to 40ms to prevent Wi-Fi stuttering
       if (absDrift > 0.250) {
           applyPlayState(true, trueHostTime + outLat, sNow(), false);
       }
-      
-      // TIER 2: THE MICRO-SLIP (40ms to 250ms)
-      // We apply a smooth, gentle 1.5% speed change to fix Wi-Fi drift
       else if (absDrift > 0.040 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
           sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.015 : 0.985;
       } 
-      
-      // TIER 3: THE HAAS DEADZONE (< 40ms)
-      // Widened deadzone. Do not touch the pitch. Pure, lossless audio quality.
       else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          if (sourceNodeRef.current.playbackRate.value !== 1.0) {
-              sourceNodeRef.current.playbackRate.value = 1.0;
-          }
+          if (sourceNodeRef.current.playbackRate.value !== 1.0) sourceNodeRef.current.playbackRate.value = 1.0;
       }
     });
 
@@ -618,7 +730,9 @@ export default function useHushPodEngine() {
       if (name !== stateRef.current.uname) toast(`💬 ${name}: ${text}`, 'inf'); 
     });
     sock.on('settings-updated', (s) => {
-      setGuestUploads(s.guestUploads); setGlobalVolume(s.globalVolume); setOrbitActive(s.orbitActive);
+      setGuestUploads(s.guestUploads); 
+      setGlobalVolume(s.globalVolume); 
+      setOrbitActive(s.orbitActive);
       if (gainNodeRef.current && actxRef.current && !s.orbitActive) gainNodeRef.current.gain.value = s.globalVolume;
     });
     sock.on('member-joined', ({ members }) => { setMembers(members); });
@@ -631,12 +745,16 @@ export default function useHushPodEngine() {
 
   const attemptCreateRoom = () => {
     if (!uname.trim()) return toast('Enter your name first', 'err');
-    setPendingAction('create'); setTosChecked(false); setModals({ ...modals, tos: true });
+    setPendingAction('create'); 
+    setTosChecked(false); 
+    setModals({ ...modals, tos: true });
   };
 
   const attemptJoinRoom = () => {
     if (!uname.trim() || codeInput.length < 3) return toast('Enter name and code', 'err');
-    setPendingAction('join'); setTosChecked(false); setModals({ ...modals, tos: true });
+    setPendingAction('join'); 
+    setTosChecked(false); 
+    setModals({ ...modals, tos: true });
   };
 
   const confirmTosAndExecute = async () => {
@@ -645,9 +763,13 @@ export default function useHushPodEngine() {
     if (pendingAction === 'create') {
       setIsSyncing(true); await initSystem();
       socketRef.current.emit('create-room', { name: uname }, (res) => {
-        setRoomCode(res.code); setMembers([{ id: socketRef.current.id, name: uname, isHost: true }]);
+        setRoomCode(res.code); 
+        setMembers([{ id: socketRef.current.id, name: uname, isHost: true }]);
         sessionStorage.setItem('hushpod_session', JSON.stringify({ code: res.code, name: uname }));
-        setIsSyncing(false); setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
+        setIsSyncing(false); 
+        setRoomTab('dj'); 
+        setView('room'); 
+        window.scrollTo(0,0);
       });
     } 
     else if (pendingAction === 'join') {
@@ -655,13 +777,21 @@ export default function useHushPodEngine() {
       socketRef.current.emit('join-room', { code: codeInput, name: uname, claimHost: false }, (res) => {
         if (res.error) { setIsSyncing(false); return toast(res.error, 'err'); }
         sessionStorage.setItem('hushpod_session', JSON.stringify({ code: codeInput, name: uname }));
-        setRoomCode(codeInput); setMembers(res.members); setQueue(res.queue);
-        setGuestUploads(res.guestUploads); setGlobalVolume(res.globalVolume); setOrbitActive(res.orbitActive || false);
+        setRoomCode(codeInput); 
+        setMembers(res.members); 
+        setQueue(res.queue);
+        setGuestUploads(res.guestUploads); 
+        setGlobalVolume(res.globalVolume); 
+        setOrbitActive(res.orbitActive || false);
+        
         if(res.currentSong) {
           setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
           guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true, res.currentSong.songId, ++loadSessionId.current);
         }
-        setIsSyncing(false); setRoomTab('dj'); setView('room'); window.scrollTo(0,0);
+        setIsSyncing(false); 
+        setRoomTab('dj'); 
+        setView('room'); 
+        window.scrollTo(0,0);
       });
     }
   };
@@ -669,18 +799,30 @@ export default function useHushPodEngine() {
   const uploadSongs = (files) => {
     if (!files || files.length === 0) return;
     if (!amHost && !guestUploads) return toast('Host has locked uploads', 'err');
+    
     let filesToUpload = Array.from(files);
-    if (filesToUpload.length > 10) { toast('Max 10 files allowed. Slicing list.', 'inf'); filesToUpload = filesToUpload.slice(0, 10); }
+    if (filesToUpload.length > 10) { 
+      toast('Max 10 files allowed. Slicing list.', 'inf'); 
+      filesToUpload = filesToUpload.slice(0, 10); 
+    }
 
-    setUploadProgress(1); const fd = new FormData();
-    for (let i = 0; i < filesToUpload.length; i++) fd.append('songs', filesToUpload[i]);
+    setUploadProgress(1); 
+    const fd = new FormData();
+    for (let i = 0; i < filesToUpload.length; i++) {
+      fd.append('songs', filesToUpload[i]);
+    }
     fd.append('uploaderId', socketRef.current.id);
     
-    const xhr = new XMLHttpRequest(); xhr.open('POST', SERVER + '/upload/' + roomCode);
-    xhr.upload.onprogress = (e) => { if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100)); };
+    const xhr = new XMLHttpRequest(); 
+    xhr.open('POST', SERVER + '/upload/' + roomCode);
+    xhr.upload.onprogress = (e) => { 
+      if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100)); 
+    };
     xhr.onload = () => { 
-      setUploadProgress(0); if (xhr.status !== 200) toast('Upload failed', 'err'); 
-      const fileInput = document.getElementById('q-file'); if (fileInput) fileInput.value = "";
+      setUploadProgress(0); 
+      if (xhr.status !== 200) toast('Upload failed', 'err'); 
+      const fileInput = document.getElementById('q-file'); 
+      if (fileInput) fileInput.value = "";
     };
     xhr.send(fd);
   };
@@ -688,16 +830,27 @@ export default function useHushPodEngine() {
   const handleGlobalVolume = (e) => {
     if(!amHost) return;
     const val = parseFloat(e.target.value);
-    setGlobalVolume(val); socketRef.current.emit('set-global-volume', { volume: val });
-    if (gainNodeRef.current && actxRef.current && !orbitActive) gainNodeRef.current.gain.value = val;
+    setGlobalVolume(val); 
+    socketRef.current.emit('set-global-volume', { volume: val });
+    if (gainNodeRef.current && actxRef.current && !orbitActive) {
+      gainNodeRef.current.gain.value = val;
+    }
   };
   
   const handleDrop = (e, index) => {
     e.preventDefault();
     if (draggedIdx === null || draggedIdx === index) return;
-    const newQ = [...queue]; const [moved] = newQ.splice(draggedIdx, 1); newQ.splice(index, 0, moved);
-    setQueue(newQ); socketRef.current.emit('reorder-queue', { newOrder: newQ.map(q => q.id) }); setDraggedIdx(null);
+    const newQ = [...queue]; 
+    const [moved] = newQ.splice(draggedIdx, 1); 
+    newQ.splice(index, 0, moved);
+    setQueue(newQ); 
+    socketRef.current.emit('reorder-queue', { newOrder: newQ.map(q => q.id) }); 
+    setDraggedIdx(null);
   };
+
+  // ==========================================
+  // EXPORTS
+  // ==========================================
 
   return {
     setView, toastData, modals, setModals, uploadProgress, roomTab, setRoomTab,
@@ -708,6 +861,6 @@ export default function useHushPodEngine() {
     tosChecked, setTosChecked, socketRef, actxRef, audioBufferRef, progFillRef, tCurRef,
     stateRef, fmt, seekClick, handleSeek, togglePlay, uploadSongs, handleDrop,
     attemptCreateRoom, attemptJoinRoom, confirmTosAndExecute, runSonarCalibration,
-    amHost, roomTitle, playNext, playPrev
+    amHost, roomTitle, playNext, playPrev, musicalChairActive, toggleMusicalChairs
   };
 }
