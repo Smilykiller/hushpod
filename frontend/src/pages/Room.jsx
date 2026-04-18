@@ -15,7 +15,7 @@ export default function Room({
   handleSeek, stateRef, actxRef, togglePlay, loopMode, toggleLoopMode, queue, setQueue,
   draggedIdx, setDraggedIdx, handleDrop, members, chat, uname, globalVolume, 
   handleGlobalVolume, orbitActive, runSonarCalibration, syncState,
-  playNext, playPrev // ADDED MISSING PROPS HERE
+  playNext, playPrev,musicalChairActive, toggleMusicalChairs// ADDED MISSING PROPS HERE
 }) {
   
   // NEW: State to handle the "Copied!" button feedback
