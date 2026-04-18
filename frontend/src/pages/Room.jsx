@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 
-// Import our new puzzle pieces!
 import DJDesk from '../components/DJDesk';
 import ListenerList from '../components/ListenerList';
 import ChatBox from '../components/ChatBox';
 import RoomSettings from '../components/RoomSettings';
-import LabsTab from '../components/LabsTab';
+import LabsTab from '../components/LabsTab'; 
 
 export default function Room({
   roomTitle, roomCode, modals, setModals, socketRef, roomTab, setRoomTab, amHost,
@@ -14,11 +13,10 @@ export default function Room({
   trackReady, progFillRef, tCurRef, audioBufferRef, fmt, seekClick, isShuffle, setIsShuffle,
   handleSeek, stateRef, actxRef, togglePlay, loopMode, toggleLoopMode, queue, setQueue,
   draggedIdx, setDraggedIdx, handleDrop, members, chat, uname, globalVolume, 
-  handleGlobalVolume, orbitActive, runSonarCalibration, syncState,
-  playNext, playPrev,musicalChairActive, toggleMusicalChairs// ADDED MISSING PROPS HERE
+  handleGlobalVolume, orbitActive, runSonarCalibration, syncState, playNext, playPrev,
+  musicalChairActive, toggleMusicalChairs 
 }) {
   
-  // NEW: State to handle the "Copied!" button feedback
   const [copied, setCopied] = useState(false);
   const joinLink = `${window.location.origin}/?room=${roomCode}`;
 
@@ -88,7 +86,13 @@ export default function Room({
             <ChatBox 
               chat={chat} 
               uname={uname} 
-              onSendMessage={(text) => socketRef.current.emit('chat-msg', { text })}
+              amHost={amHost}
+              onSendMessage={(text) => socketRef.current.emit('chat-msg', { 
+                roomCode: roomCode, 
+                code: roomCode, 
+                name: uname, 
+                text: text 
+              })}
             />
           </div>
 
@@ -104,7 +108,6 @@ export default function Room({
           </div>
 
           <div style={{ display: roomTab === 'orbit' ? 'block' : 'none' }}>
-            {/* We pass the ENTIRE engine object in as one clean prop! */}
             <LabsTab engine={{
               amHost, queue, currentSong, isPlaying, musicalChairActive, 
               toggleMusicalChairs, playNext, playPrev, togglePlay, 
@@ -133,7 +136,6 @@ export default function Room({
             
             <p style={{color:'var(--sub)', fontSize:'13px', marginBottom:'12px'}}>Or use code: <strong style={{color:'var(--pink)', fontSize:'18px', letterSpacing:'2px'}}>{roomCode}</strong></p>
             
-            {/* NEW: Copy Link Input & Button */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--s2)', padding: '6px 8px', borderRadius: '12px', border: '1px solid var(--border)', marginBottom: '20px' }}>
               <input 
                 type="text" 

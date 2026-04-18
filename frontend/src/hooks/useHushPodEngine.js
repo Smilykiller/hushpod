@@ -85,7 +85,8 @@ export default function useHushPodEngine() {
     lastHeartbeatTime: 0, 
     isTransitioning: false, 
     isTransitioningOS: false, // NEW: Tracks the Sleep Wobble
-    outLat: 0.050
+    outLat: 0.050,
+    roomCode: '' // NEW: Remembers the room during sleep
   });
   
   // --- HELPERS ---
@@ -133,11 +134,12 @@ export default function useHushPodEngine() {
     stateRef.current.shuffle = isShuffle;
     stateRef.current.currentSongId = currentSong?.id;
     stateRef.current.uname = uname;
+    stateRef.current.roomCode = roomCode; // NEW: Keep memory updated
     stateRef.current.amHost = amHost;
     stateRef.current.members = members;
     stateRef.current.globalVolume = globalVolume;
     stateRef.current.orbitActive = orbitActive;
-  }, [queue, loopMode, isShuffle, currentSong, uname, amHost, members, globalVolume, orbitActive]);
+  }, [queue, loopMode, isShuffle, currentSong, uname, roomCode, amHost, members, globalVolume, orbitActive]);
 
   // 3. BROWSER AUDIO UNLOCK
   useEffect(() => {
@@ -362,8 +364,19 @@ export default function useHushPodEngine() {
       socketRef.current = io(SERVER, { transports: ['websocket', 'polling'] });
       setupSocketListeners(socketRef.current);
       socketRef.current.on('connect', () => {
-         if (stateRef.current.uname && roomCode) {
-           socketRef.current.emit('join-room', { code: roomCode, name: stateRef.current.uname, claimHost: false }, () => {});
+         // If we wake up from sleep and already have memory of a room...
+         const savedUname = stateRef.current.uname;
+         const savedCode = stateRef.current.roomCode;
+         
+         if (savedUname && savedCode) {
+           // Re-join and DEMAND the host role if we previously had it
+           socketRef.current.emit('join-room', { 
+             code: savedCode, 
+             name: savedUname, 
+             claimHost: stateRef.current.amHost // THE FIX: Reclaim the crown!
+           }, () => {
+             toast("Connection restored", "ok");
+           });
          }
       });
     }
