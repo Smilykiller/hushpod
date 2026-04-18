@@ -285,31 +285,39 @@ io.on('connection', (socket) => {
     }
   });
  socket.on('disconnect', () => {
-    try {
-      const room = rooms[roomCode];
-      if (!room) return;
-      delete room.members[socket.id];
+    // Loop through all active rooms to find where this user was
+    for (const [roomCode, room] of Object.entries(rooms)) {
+      const memberIndex = room.members.findIndex(m => m.id === socket.id);
       
-      // FIX: If Host leaves, auto-promote the oldest guest! Never stop the music.
-      if (room.hostId === socket.id) {
-        const remainingIds = Object.keys(room.members);
-        if (remainingIds.length > 0) {
-          const newHostId = remainingIds[0]; // The first person who joined
-          room.hostId = newHostId;
-          room.admins = [newHostId]; // Keep compatibility
-          room.members[newHostId].isHost = true;
-          
-          io.to(roomCode).emit('settings-updated', { admins: room.admins, guestUploads: room.guestUploads, globalVolume: room.globalVolume, orbitActive: room.orbitActive });
-          io.to(roomCode).emit('member-joined', { members: Object.values(room.members) });
+      if (memberIndex !== -1) {
+        // Did the person who just left have the crown?
+        const wasHost = room.members[memberIndex].isHost;
+        
+        // Remove them from the array
+        room.members.splice(memberIndex, 1);
+
+        if (room.members.length === 0) {
+          // Everyone left. Shut off the lights and delete the room.
+          delete rooms[roomCode];
         } else {
-          // Only destroy the room if it is completely empty
-          room.queue.forEach(s => { if (fs.existsSync(s.filePath)) fs.unlinkSync(s.filePath); });
-          delete rooms[roomCode]; 
+          let newHostName = null;
+          
+          // If the Host left, give the crown to the next person in line
+          if (wasHost) {
+            room.members[0].isHost = true;
+            newHostName = room.members[0].name;
+          }
+
+          // Broadcast the updated array (and the new host's name) to the survivors
+          io.to(roomCode).emit('member-left', { 
+            members: room.members,
+            newHostName: newHostName 
+          });
         }
-      } else {
-        socket.to(roomCode).emit('member-left', { members: Object.values(room.members) });
+        // User found and handled, break out of the loop
+        break;
       }
-    } catch (err) {}
+    }
   });
 
 }); // <--- ADDED THIS LINE! This correctly closes the io.on('connection') block.

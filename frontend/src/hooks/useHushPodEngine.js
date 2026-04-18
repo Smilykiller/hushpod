@@ -766,11 +766,14 @@ export default function useHushPodEngine() {
       if (gainNodeRef.current && actxRef.current && !s.orbitActive) gainNodeRef.current.gain.value = s.globalVolume;
     });
     sock.on('member-joined', ({ members }) => { setMembers(members); });
-    sock.on('member-left', ({ members }) => { setMembers(members); });
-    sock.on('host-left', () => { 
-      sessionStorage.removeItem('hushpod_session'); toast('Host ended the room', 'err'); 
-      setTimeout(() => window.location.href = '/', 2000); 
+    
+    // NEW: We listen for the backend to tell us who the new host is!
+    sock.on('member-left', ({ members, newHostName }) => { 
+      setMembers(members); 
+      if (newHostName) toast(`👑 ${newHostName} is the new Host!`, 'ok');
     });
+
+    // We completely deleted the 'host-left' kickout rule!
   };
 
   const attemptCreateRoom = () => {
