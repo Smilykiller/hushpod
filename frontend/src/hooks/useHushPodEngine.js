@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
 
-const SERVER = window.location.port === '3000' ? `http://${window.location.hostname}:5000` : window.location.origin;
+const SERVER = "https://hushpod.onrender.com";
 
 export default function useHushPodEngine() {
   const navigate = useNavigate();
@@ -153,6 +153,7 @@ export default function useHushPodEngine() {
       window.removeEventListener('touchstart', unlockAudio); 
     };
   }, []);
+  
 
   // 4. DEVICE HARDWARE CHANGE DETECTION
   useEffect(() => {
@@ -327,6 +328,37 @@ export default function useHushPodEngine() {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
+  // 10. NATIVE LOCK SCREEN CONTROLS (Android / iOS Media Center)
+  useEffect(() => {
+    if ('mediaSession' in navigator) {
+      // 1. Tell the OS what is currently playing
+      navigator.mediaSession.metadata = new window.MediaMetadata({
+        title: currentSong ? currentSong.name : 'HushPod Party',
+        artist: amHost ? 'DJ ' + uname : roomTitle,
+        album: 'HushPod Live Session',
+        artwork: [
+          { src: 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=512&q=80', sizes: '512x512', type: 'image/jpeg' }
+        ]
+      });
+
+      // 2. Wire up the native OS buttons to your React engine
+      navigator.mediaSession.setActionHandler('play', () => {
+        if (amHost) togglePlay();
+      });
+      
+      navigator.mediaSession.setActionHandler('pause', () => {
+        if (amHost) togglePlay();
+      });
+      
+      navigator.mediaSession.setActionHandler('nexttrack', () => {
+        if (amHost) playNext(true);
+      });
+      
+      navigator.mediaSession.setActionHandler('previoustrack', () => {
+        if (amHost) playPrev();
+      });
+    }
+  }, [currentSong, amHost, uname, roomTitle]);
 
 
   // ==========================================

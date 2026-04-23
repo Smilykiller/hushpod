@@ -1,0 +1,5 @@
+{
+  "appId": "com.zentryhub.hushpod",
+  "appName": "HushPod",
+  "webDir": "frontend/build"
+}
