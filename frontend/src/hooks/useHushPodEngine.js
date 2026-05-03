@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
 
-const SERVER = "https://hushpod-api.onrender.com";
+const SERVER = "https://hushpod.onrender.com";
 
 export default function useHushPodEngine() {
   const navigate = useNavigate();
@@ -241,10 +241,14 @@ export default function useHushPodEngine() {
       const { code, name, isHost: wasHost } = JSON.parse(raw);
       setUname(name);
       setCodeInput(code);
-      initSystem().then(() => {
-        // FIX: Pass the saved isHost flag so the server can restore the crown
-        // Previously this was hardcoded to claimHost: false, meaning hosts
-        // always lost their DJ controls after a page refresh.
+      initSystem()
+      .catch(() => {
+        sessionStorage.removeItem('hushpod_session');
+        setIsSyncing(false);
+        toast('Could not reach server. Please rejoin.', 'err');
+      })
+      .then(() => {
+        if (!socketRef.current) return; // initSystem failed, already handled above
         socketRef.current.emit('join-room', { code, name, claimHost: !!wasHost }, (res) => {
           if (res.error) {
             sessionStorage.removeItem('hushpod_session');
@@ -393,38 +397,57 @@ export default function useHushPodEngine() {
     if (!socketRef.current) {
       socketRef.current = io(SERVER, { transports: ['websocket', 'polling'] });
       setupSocketListeners(socketRef.current);
+    }
 
-      // FIX: Handle socket reconnect (e.g. brief network dropout)
-      // Previously the callback ignored the response object, so:
-      // - Room-not-found errors were silent (user stuck in broken state)
-      // - Members and queue were never refreshed after reconnect
-      socketRef.current.on('connect', () => {
-        const savedUname = stateRef.current.uname;
-        const savedCode  = stateRef.current.roomCode;
+    // FIX: Wait for socket to actually be connected before returning.
+    // Previously initSystem() returned immediately after io() — which is async.
+    // So confirmTosAndExecute() called emit('create-room') before the socket was
+    // ready. Socket.io buffers the emit, but if the server is slow (Render cold
+    // start) or unreachable, the callback never fires → isSyncing stuck forever.
+    if (!socketRef.current.connected) {
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Server took too long to respond. Check your connection.'));
+        }, 12000);
 
-        if (savedUname && savedCode) {
-          socketRef.current.emit('join-room', {
-            code:       savedCode,
-            name:       savedUname,
-            claimHost:  stateRef.current.amHost,
-          }, (res) => {
-            if (res.error) {
-              // Room expired while we were offline — send user to join screen
-              sessionStorage.removeItem('hushpod_session');
-              toast('Session expired. Please rejoin.', 'err');
-              setIsSyncing(false);
-              setView('app-entry');
-            } else {
-              // Refresh local state from server truth
-              if (res.members) setMembers(res.members);
-              if (res.queue)   setQueue(res.queue);
-              if (res.orbitActive !== undefined) setOrbitActive(res.orbitActive);
-              toast('Connection restored', 'ok');
-            }
-          });
-        }
+        socketRef.current.once('connect', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        socketRef.current.once('connect_error', (err) => {
+          clearTimeout(timeout);
+          reject(new Error('Cannot reach server: ' + err.message));
+        });
       });
     }
+
+    // Handle reconnection (e.g. brief network dropout after already in a room)
+    socketRef.current.off('connect');
+    socketRef.current.on('connect', () => {
+      const savedUname = stateRef.current.uname;
+      const savedCode  = stateRef.current.roomCode;
+
+      if (savedUname && savedCode) {
+        socketRef.current.emit('join-room', {
+          code:      savedCode,
+          name:      savedUname,
+          claimHost: stateRef.current.amHost,
+        }, (res) => {
+          if (!res) return;
+          if (res.error) {
+            sessionStorage.removeItem('hushpod_session');
+            toast('Session expired. Please rejoin.', 'err');
+            setIsSyncing(false);
+            setView('app-entry');
+          } else {
+            if (res.members) setMembers(res.members);
+            if (res.queue)   setQueue(res.queue);
+            if (res.orbitActive !== undefined) setOrbitActive(res.orbitActive);
+            toast('Connection restored', 'ok');
+          }
+        });
+      }
+    });
   };
 
   const syncClock = async () => {
@@ -687,24 +710,54 @@ export default function useHushPodEngine() {
 
     if (pendingAction === 'create') {
       setIsSyncing(true);
-      await initSystem();
+      try {
+        await initSystem();
+      } catch (err) {
+        setIsSyncing(false);
+        return toast(err.message || 'Could not connect to server.', 'err');
+      }
+
+      // Safety timeout — if server never calls back, unblock the UI after 10s
+      const safetyTimer = setTimeout(() => {
+        setIsSyncing(false);
+        toast('Server did not respond. Try again.', 'err');
+      }, 10000);
+
       socketRef.current.emit('create-room', { name: uname }, (res) => {
+        clearTimeout(safetyTimer);
+        if (!res || res.error) {
+          setIsSyncing(false);
+          return toast(res?.error || 'Failed to create room.', 'err');
+        }
         setRoomCode(res.code);
         setMembers([{ id: socketRef.current.id, name: uname, isHost: true }]);
-        // FIX: Save isHost:true so page-refresh can send claimHost:true to server
         sessionStorage.setItem('hushpod_session', JSON.stringify({ code: res.code, name: uname, isHost: true }));
         setIsSyncing(false);
         setRoomTab('dj');
         setView('room');
         window.scrollTo(0, 0);
       });
+
     } else if (pendingAction === 'join') {
       setIsSyncing(true);
-      await initSystem();
+      try {
+        await initSystem();
+      } catch (err) {
+        setIsSyncing(false);
+        return toast(err.message || 'Could not connect to server.', 'err');
+      }
+
+      const safetyTimer = setTimeout(() => {
+        setIsSyncing(false);
+        toast('Server did not respond. Try again.', 'err');
+      }, 10000);
+
       socketRef.current.emit('join-room', { code: codeInput, name: uname, claimHost: false }, (res) => {
-        if (res.error) { setIsSyncing(false); return toast(res.error, 'err'); }
-        // FIX: Save isHost from the server response (guests who later become host
-        // will have this updated via the member-joined event + sessionStorage update below)
+        clearTimeout(safetyTimer);
+        if (!res || res.error) {
+          setIsSyncing(false);
+          return toast(res?.error || 'Failed to join room.', 'err');
+        }
         sessionStorage.setItem('hushpod_session', JSON.stringify({ code: codeInput, name: uname, isHost: res.isHost || false }));
         setRoomCode(codeInput);
         setMembers(res.members);
