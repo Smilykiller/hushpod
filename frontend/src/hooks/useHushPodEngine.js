@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
 
-const SERVER = "https://hushpod.onrender.com";
+const SERVER = "https://hushpod-api.onrender.com";
 
 export default function useHushPodEngine() {
   const navigate = useNavigate();

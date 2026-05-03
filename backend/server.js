@@ -7,7 +7,12 @@ const multer = require('multer');
 const fs = require('fs');
 
 const app = express();
-app.use(cors());
+
+// CORS must be first — before every route
+const corsOptions = { origin: '*', methods: ['GET','POST','OPTIONS'], allowedHeaders: ['Content-Type','Authorization'] };
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // handle preflight
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
