@@ -30,13 +30,63 @@ if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 
 // ─── DATA STORES ───────────────────────────────────────────────────────────────
 const rooms = {};
-
-// BUG FIX: Host grace period tracker.
-// When a host disconnects, we wait 30s before giving the crown away.
-// If they reconnect with claimHost:true within that window, they get it back.
 const hostGrace = {}; // { roomCode: { timerId, hostName } }
 
 const upload = multer({ dest: 'uploads/', limits: { fileSize: 150 * 1024 * 1024 } });
+
+// ─── FIX 2: QUEUE PERSISTENCE ──────────────────────────────────────────────────
+// Saves room queue metadata to disk on every change so that a server crash/restart
+// doesn't wipe the party. Audio files already live in uploads/ on disk, so streams
+// still work after a restart. (Note: a full Render redeploy wipes the filesystem —
+// for that you'd need a database. This covers crash restarts perfectly.)
+const STATE_FILE = path.join(__dirname, 'room_state.json');
+
+function saveRoomState() {
+  try {
+    const snapshot = {};
+    for (const [code, room] of Object.entries(rooms)) {
+      if (room.queue.length === 0) continue;
+      snapshot[code] = {
+        hostName:      room.hostName,
+        currentSongId: room.currentSongId,
+        guestUploads:  room.guestUploads,
+        globalVolume:  room.globalVolume,
+        // Only save songs whose file still exists on disk
+        queue: room.queue
+          .filter(s => s.filePath && fs.existsSync(s.filePath))
+          .map(s => ({ id: s.id, name: s.name, filePath: s.filePath, type: s.type, streamUrl: s.streamUrl })),
+      };
+    }
+    fs.writeFileSync(STATE_FILE, JSON.stringify(snapshot), 'utf8');
+  } catch (e) { console.error('[STATE SAVE]', e); }
+}
+
+function loadRoomState() {
+  try {
+    if (!fs.existsSync(STATE_FILE)) return;
+    const snapshot = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    for (const [code, saved] of Object.entries(snapshot)) {
+      const validQueue = (saved.queue || []).filter(s => s.filePath && fs.existsSync(s.filePath));
+      if (validQueue.length === 0) continue;
+      rooms[code] = {
+        hostId: null, hostName: saved.hostName || 'Host',
+        queue:  validQueue.map(s => ({ ...s, upvotes: [] })),
+        currentSongId: validQueue.find(s => s.id === saved.currentSongId) ? saved.currentSongId : validQueue[0].id,
+        // Start paused after restart — guests must wait for host to resume
+        playState:    { playing: false, currentTime: 0, ts: Date.now() },
+        members:      [],
+        admins:       [],
+        guestUploads: saved.guestUploads || false,
+        globalVolume: saved.globalVolume || 1.0,
+        orbitActive:  false,
+      };
+      console.log(`[STATE] Restored room ${code} with ${validQueue.length} songs`);
+    }
+  } catch (e) { console.error('[STATE LOAD]', e); }
+}
+
+// Load persisted rooms immediately at startup
+loadRoomState();
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────────
 function generateCode() {
@@ -154,6 +204,7 @@ app.post('/upload/:code', upload.array('songs', 10), (req, res) => {
   } else {
     io.to(req.params.code).emit('queue-updated', { queue: getCleanQueue(room) });
   }
+  saveRoomState(); // FIX 2: persist queue after every upload
   res.json({ ok: true });
 });
 
@@ -358,6 +409,7 @@ io.on('connection', (socket) => {
     room.queue.forEach(s => { if (!newOrder.includes(s.id)) reordered.push(s); });
     room.queue = reordered;
     io.to(roomCode).emit('queue-updated', { queue: getCleanQueue(room) });
+    saveRoomState();
   });
 
   socket.on('upvote', ({ songId }) => {
@@ -371,6 +423,7 @@ io.on('connection', (socket) => {
     others.sort((a, b) => (b.upvotes?.length || 0) - (a.upvotes?.length || 0));
     room.queue = current ? [current, ...others] : others;
     io.to(roomCode).emit('queue-updated', { queue: getCleanQueue(room) });
+    saveRoomState();
   });
 
   // ── CHAT ──

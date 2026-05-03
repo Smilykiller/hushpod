@@ -12,9 +12,9 @@ export default function Room({
   guestUploads, setGuestUploads, uploadSongs, uploadProgress, currentSong, isPlaying,
   trackReady, progFillRef, tCurRef, audioBufferRef, fmt, seekClick, isShuffle, setIsShuffle,
   handleSeek, stateRef, actxRef, togglePlay, loopMode, toggleLoopMode, queue, setQueue,
-  draggedIdx, setDraggedIdx, handleDrop, members, chat, uname, globalVolume, 
-  handleGlobalVolume, orbitActive, runSonarCalibration, syncState, playNext, playPrev,
-  musicalChairActive, toggleMusicalChairs 
+  draggedIdx, setDraggedIdx, handleDrop, members, chat, uname, globalVolume,
+  handleGlobalVolume, localVolume, handleLocalVolume, orbitActive, runSonarCalibration,
+  syncState, playNext, playPrev, musicalChairActive, toggleMusicalChairs
 }) {
   
   const [copied, setCopied] = useState(false);
@@ -97,13 +97,15 @@ export default function Room({
           </div>
 
           <div style={{ display: roomTab === 'settings' ? 'block' : 'none' }}>
-            <RoomSettings 
-              amHost={amHost} 
-              guestUploads={guestUploads} 
-              setGuestUploads={setGuestUploads} 
-              globalVolume={globalVolume} 
-              handleGlobalVolume={handleGlobalVolume} 
-              socketRef={socketRef} 
+          <RoomSettings
+              amHost={amHost}
+              guestUploads={guestUploads}
+              setGuestUploads={setGuestUploads}
+              globalVolume={globalVolume}
+              handleGlobalVolume={handleGlobalVolume}
+              localVolume={localVolume}
+              handleLocalVolume={handleLocalVolume}
+              socketRef={socketRef}
             />
           </div>
 

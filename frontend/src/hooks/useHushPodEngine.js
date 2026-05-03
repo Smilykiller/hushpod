@@ -47,6 +47,17 @@ export default function useHushPodEngine() {
 
   const [musicalChairActive, setMusicalChairActive] = useState(false);
   const [loopMode, setLoopMode]         = useState('none');
+  const [localVolume, setLocalVolume]   = useState(1.0);
+
+  // Feature: Floating reactions
+  const [reactions, setReactions]       = useState([]); // [{id, emoji, name, x}]
+  // Feature: Typing indicator
+  const [typingUsers, setTypingUsers]   = useState([]); // ['Alice', 'Bob']
+  // Feature: Room password
+  const [roomPassword, setRoomPassword] = useState('');
+  const [joinPassword, setJoinPassword] = useState('');
+
+  const typingTimers = useRef({});
 
   const [tosChecked, setTosChecked]     = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
@@ -676,15 +687,35 @@ export default function useHushPodEngine() {
 
     sock.on('member-joined', ({ members }) => { setMembers(members); });
 
-    // FIX: Added hostAway flag — when host briefly disconnects (30s grace period),
-    // guests now see an informative message instead of a confusing instant host transfer.
     sock.on('member-left', ({ members, newHostName, hostAway }) => {
       setMembers(members);
-      if (hostAway) {
-        toast('Host lost connection. Waiting 30s for them to return...', 'inf');
-      } else if (newHostName) {
-        toast(`👑 ${newHostName} is the new Host!`, 'ok');
+      if (hostAway) toast('Host lost connection. Waiting 30s for them to return...', 'inf');
+      else if (newHostName) toast(`👑 ${newHostName} is the new Host!`, 'ok');
+    });
+
+    // Feature: Typing indicator
+    sock.on('typing', ({ name, isTyping }) => {
+      setTypingUsers(prev => {
+        if (isTyping && !prev.includes(name)) return [...prev, name];
+        if (!isTyping) return prev.filter(n => n !== name);
+        return prev;
+      });
+      // Auto-clear after 4s in case stop event is missed
+      clearTimeout(typingTimers.current[name]);
+      if (isTyping) {
+        typingTimers.current[name] = setTimeout(() => {
+          setTypingUsers(prev => prev.filter(n => n !== name));
+        }, 4000);
       }
+    });
+
+    // Feature: Floating emoji reactions
+    sock.on('reaction', ({ name, emoji }) => {
+      const id = Date.now() + Math.random();
+      const x  = 10 + Math.random() * 80; // random horizontal position %
+      setReactions(prev => [...prev, { id, emoji, name, x }]);
+      // Remove after animation completes (2.5s)
+      setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2500);
     });
   };
 
@@ -929,15 +960,60 @@ export default function useHushPodEngine() {
     }
   };
 
+  // FIX 1: Guest visualizer — restart the RAF loop whenever isPlaying flips to true.
+  // Previously if a guest's tab lost focus (browser throttles RAF), the loop died and
+  // they'd see a frozen progress bar + blank waveform for the rest of the session.
+  useEffect(() => {
+    if (isPlaying && analyserRef.current && actxRef.current) {
+      cancelAnimationFrame(vizRafRef.current);
+      drawVisualizer();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying]);
+
+  // FIX 3: Local (personal) volume — never broadcast to server, only adjusts this
+  // device's gain node. Works independently from the host's global volume.
+  const handleLocalVolume = (e) => {
+    const val = parseFloat(e.target.value);
+    setLocalVolume(val);
+    // Multiply personal volume into the current gain value
+    if (gainNodeRef.current && actxRef.current) {
+      gainNodeRef.current.gain.value = stateRef.current.globalVolume * val;
+    }
+  };
+
+  // FIX 4: File type validation before upload
+  const ALLOWED_AUDIO = ['audio/mpeg','audio/mp3','audio/wav','audio/flac','audio/aac','audio/ogg','audio/x-m4a','audio/mp4'];
+  const ALLOWED_EXT   = ['.mp3','.wav','.flac','.aac','.ogg','.m4a'];
+
   const uploadSongs = (files) => {
     if (!files || files.length === 0) return;
     if (!stateRef.current.amHost && !guestUploads) return toast('Host has locked uploads', 'err');
 
     let filesToUpload = Array.from(files);
+
+    // FIX 4: Reject non-audio files with a clear error message
+    const invalid = filesToUpload.filter(f => {
+      const ext = '.' + f.name.split('.').pop().toLowerCase();
+      return !ALLOWED_AUDIO.includes(f.type) && !ALLOWED_EXT.includes(ext);
+    });
+    if (invalid.length > 0) {
+      toast(`❌ ${invalid.map(f => f.name).join(', ')} — only MP3, WAV, FLAC, AAC allowed`, 'err');
+      filesToUpload = filesToUpload.filter(f => {
+        const ext = '.' + f.name.split('.').pop().toLowerCase();
+        return ALLOWED_AUDIO.includes(f.type) || ALLOWED_EXT.includes(ext);
+      });
+      if (filesToUpload.length === 0) return;
+    }
+
     if (filesToUpload.length > 10) {
       toast('Max 10 files allowed. Slicing list.', 'inf');
       filesToUpload = filesToUpload.slice(0, 10);
     }
+
+    // Warn about large files before uploading
+    const large = filesToUpload.filter(f => f.size > 50 * 1024 * 1024);
+    if (large.length > 0) toast(`⚠️ Large file detected — upload may take a moment`, 'inf');
 
     setUploadProgress(1);
     const fd = new FormData();
@@ -951,7 +1027,9 @@ export default function useHushPodEngine() {
     };
     xhr.onload = () => {
       setUploadProgress(0);
-      if (xhr.status !== 200) toast('Upload failed', 'err');
+      if (xhr.status === 403) return toast('Host has locked uploads', 'err');
+      if (xhr.status !== 200) return toast('Upload failed — try again', 'err');
+      toast(`✅ ${filesToUpload.length} song${filesToUpload.length > 1 ? 's' : ''} added!`, 'ok');
       const fileInput = document.getElementById('q-file');
       if (fileInput) fileInput.value = '';
     };
@@ -1038,9 +1116,11 @@ export default function useHushPodEngine() {
     setView, toastData, modals, setModals, uploadProgress, roomTab, setRoomTab,
     uname, setUname, roomCode, isSyncing, codeInput, setCodeInput, members,
     queue, setQueue, chat, currentSong, syncState, isPlaying, trackReady,
-    guestUploads, setGuestUploads, globalVolume, handleGlobalVolume, orbitActive,
-    loopMode, toggleLoopMode, isShuffle, setIsShuffle, draggedIdx, setDraggedIdx,
-    tosChecked, setTosChecked, socketRef, actxRef, audioBufferRef, progFillRef, tCurRef,
+    guestUploads, setGuestUploads, globalVolume, handleGlobalVolume,
+    localVolume, handleLocalVolume,
+    orbitActive, loopMode, toggleLoopMode, isShuffle, setIsShuffle,
+    draggedIdx, setDraggedIdx, tosChecked, setTosChecked,
+    socketRef, actxRef, audioBufferRef, progFillRef, tCurRef,
     stateRef, fmt, seekClick, handleSeek, togglePlay, uploadSongs, handleDrop,
     attemptCreateRoom, attemptJoinRoom, confirmTosAndExecute, runSonarCalibration,
     amHost, roomTitle, playNext, playPrev, musicalChairActive, toggleMusicalChairs,
