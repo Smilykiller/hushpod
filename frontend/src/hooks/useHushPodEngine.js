@@ -2,94 +2,101 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
 
-const SERVER = "https://hushpod.onrender.com";
+const SERVER = "https://hushpod-api.onrender.com";
 
 export default function useHushPodEngine() {
   const navigate = useNavigate();
   const location = useLocation();
-  
+
   const setView = (viewName) => {
     if (viewName === 'marketing') navigate('/');
     else if (viewName === 'app-entry') navigate('/join');
     else if (viewName === 'room') navigate('/room');
   };
 
-  // --- STATE DECLARED HERE ---
-  const [toastData, setToastData] = useState({ msg: '', type: 'inf', visible: false });
-  const [modals, setModals] = useState({ qr: false, tos: false });
+  // ==========================================
+  // STATE
+  // ==========================================
+  const [toastData, setToastData]       = useState({ msg: '', type: 'inf', visible: false });
+  const [modals, setModals]             = useState({ qr: false, tos: false });
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [roomTab, setRoomTab] = useState('dj'); 
+  const [roomTab, setRoomTab]           = useState('dj');
 
-  const [uname, setUname] = useState('');
-  const [roomCode, setRoomCode] = useState('');
-  const [isSyncing, setIsSyncing] = useState(true);
-  const [codeInput, setCodeInput] = useState('');
-  
-  const [members, setMembers] = useState([]);
-  const [queue, setQueue] = useState([]);
-  const [chat, setChat] = useState([]);
-  const [currentSong, setCurrentSong] = useState(null);
-  
-  const [syncState, setSyncState] = useState({ state: 'syncing', label: 'Waiting for host...' });
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [trackReady, setTrackReady] = useState(true);
-  
+  const [uname, setUname]               = useState('');
+  const [roomCode, setRoomCode]         = useState('');
+  const [isSyncing, setIsSyncing]       = useState(true);
+  const [codeInput, setCodeInput]       = useState('');
+
+  const [members, setMembers]           = useState([]);
+  const [queue, setQueue]               = useState([]);
+  const [chat, setChat]                 = useState([]);
+  const [currentSong, setCurrentSong]   = useState(null);
+
+  const [syncState, setSyncState]       = useState({ state: 'syncing', label: 'Waiting for host...' });
+  const [isPlaying, setIsPlaying]       = useState(false);
+  const [trackReady, setTrackReady]     = useState(true);
+
   const [guestUploads, setGuestUploads] = useState(false);
   const [globalVolume, setGlobalVolume] = useState(1.0);
-  const [orbitActive, setOrbitActive] = useState(false);
-  const [isShuffle, setIsShuffle] = useState(false);
-  const [draggedIdx, setDraggedIdx] = useState(null);
-  
-  const [musicalChairActive, setMusicalChairActive] = useState(false);
-  const [loopMode, setLoopMode] = useState('none');
+  const [orbitActive, setOrbitActive]   = useState(false);
+  const [isShuffle, setIsShuffle]       = useState(false);
+  const [draggedIdx, setDraggedIdx]     = useState(null);
 
-  const [tosChecked, setTosChecked] = useState(false);
+  const [musicalChairActive, setMusicalChairActive] = useState(false);
+  const [loopMode, setLoopMode]         = useState('none');
+
+  const [tosChecked, setTosChecked]     = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
 
-  // --- REFS DECLARED HERE ---
-  const socketRef = useRef(null);
-  const actxRef = useRef(null);
-  const audioBufferRef = useRef(null);
-  const sourceNodeRef = useRef(null);
-  const gainNodeRef = useRef(null);
-  const pannerNodeRef = useRef(null);
-  const analyserRef = useRef(null);
-  const trackCacheRef = useRef({}); 
-  
-  const loadSessionId = useRef(0);
-  const progFillRef = useRef(null);
-  const tCurRef = useRef(null);
-  const chatBoxRef = useRef(null);
-  const vizRafRef = useRef(null);
-  const toastTmr = useRef(null);
-  const musicalChairTimer = useRef(null);
-  const keepAliveRef = useRef(null);
-  const sleepArmorTmr = useRef(null);
+  // ==========================================
+  // REFS
+  // ==========================================
+  const socketRef       = useRef(null);
+  const actxRef         = useRef(null);
+  const audioBufferRef  = useRef(null);
+  const sourceNodeRef   = useRef(null);
+  const gainNodeRef     = useRef(null);
+  const pannerNodeRef   = useRef(null);
+  const analyserRef     = useRef(null);
+  const trackCacheRef   = useRef({});
 
-  // The master state ref for the audio engine math
-  const stateRef = useRef({ 
+  const loadSessionId   = useRef(0);
+  const progFillRef     = useRef(null);
+  const tCurRef         = useRef(null);
+  const chatBoxRef      = useRef(null);
+  const vizRafRef       = useRef(null);
+  const toastTmr        = useRef(null);
+  const musicalChairTimer = useRef(null);
+  const keepAliveRef    = useRef(null);
+  const sleepArmorTmr   = useRef(null);
+
+  // Master state ref — the audio engine reads this directly to avoid stale closures
+  const stateRef = useRef({
     clockOff: 0,
-    songOffset: 0, 
-    nodeStartTime: 0, 
-    localPlayState: false, 
-    amHost: false, 
-    queue: [], 
-    loopMode: 'none', 
-    shuffle: false, 
-    currentSongId: null, 
-    uname: '', 
-    members: [], 
-    globalVolume: 1.0, 
-    orbitActive: false, 
-    accumulatedRateDrift: 0, 
-    lastHeartbeatTime: 0, 
-    isTransitioning: false, 
-    isTransitioningOS: false, // NEW: Tracks the Sleep Wobble
+    songOffset: 0,
+    nodeStartTime: 0,
+    localPlayState: false,
+    amHost: false,
+    queue: [],
+    loopMode: 'none',
+    shuffle: false,
+    currentSongId: null,
+    uname: '',
+    members: [],
+    globalVolume: 1.0,
+    orbitActive: false,
+    accumulatedRateDrift: 0,
+    lastHeartbeatTime: 0,
+    isTransitioning: false,
+    isTransitioningOS: false,
+    isCalibrated: false,
     outLat: 0.050,
-    roomCode: '' // NEW: Remembers the room during sleep
+    roomCode: '',
   });
-  
-  // --- HELPERS ---
+
+  // ==========================================
+  // HELPERS
+  // ==========================================
   const toast = (msg, type = 'inf') => {
     setToastData({ msg, type, visible: true });
     clearTimeout(toastTmr.current);
@@ -97,28 +104,27 @@ export default function useHushPodEngine() {
   };
 
   const myMemberData = members.find(m => m.id === socketRef.current?.id);
-  const amHost = myMemberData ? myMemberData.isHost : false;
-  const currentHost = members.find(m => m.isHost);
-  const roomTitle = currentHost ? `${currentHost.name}'s Party` : 'ROOM';
-  
-  const fmt = (s) => { 
-    if (!s || isNaN(s)) return '0:00'; 
-    return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0'); 
+  const amHost       = myMemberData ? myMemberData.isHost : false;
+  const currentHost  = members.find(m => m.isHost);
+  const roomTitle    = currentHost ? `${currentHost.name}'s Party` : 'ROOM';
+
+  const fmt = (s) => {
+    if (!s || isNaN(s)) return '0:00';
+    return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
   };
-  
+
   const sNow = () => Date.now() + stateRef.current.clockOff;
 
-
   // ==========================================
-  // USE EFFECTS (All hooks must stay at top level)
+  // USE EFFECTS
   // ==========================================
 
-  // 1. WAKE LOCK API (Prevents screen-off audio death)
+  // 1. WAKE LOCK — prevents screen-off from killing audio
   useEffect(() => {
     let wakeLock = null;
     const requestWakeLock = async () => {
-      try { 
-        if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); 
+      try {
+        if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
       } catch (err) {}
     };
     requestWakeLock();
@@ -127,71 +133,68 @@ export default function useHushPodEngine() {
     return () => document.removeEventListener('visibilitychange', handleVis);
   }, []);
 
-  // 2. STATE REF SYNC
+  // 2. KEEP stateRef in sync with React state so audio engine math is never stale
   useEffect(() => {
-    stateRef.current.queue = queue;
-    stateRef.current.loopMode = loopMode;
-    stateRef.current.shuffle = isShuffle;
+    stateRef.current.queue         = queue;
+    stateRef.current.loopMode      = loopMode;
+    stateRef.current.shuffle       = isShuffle;
     stateRef.current.currentSongId = currentSong?.id;
-    stateRef.current.uname = uname;
-    stateRef.current.roomCode = roomCode; // NEW: Keep memory updated
-    stateRef.current.amHost = amHost;
-    stateRef.current.members = members;
-    stateRef.current.globalVolume = globalVolume;
-    stateRef.current.orbitActive = orbitActive;
+    stateRef.current.uname         = uname;
+    stateRef.current.roomCode      = roomCode;
+    stateRef.current.amHost        = amHost;
+    stateRef.current.members       = members;
+    stateRef.current.globalVolume  = globalVolume;
+    stateRef.current.orbitActive   = orbitActive;
   }, [queue, loopMode, isShuffle, currentSong, uname, roomCode, amHost, members, globalVolume, orbitActive]);
 
-  // 3. BROWSER AUDIO UNLOCK
+  // 3. BROWSER AUDIO UNLOCK — first user interaction resumes the AudioContext
   useEffect(() => {
-    const unlockAudio = () => { 
-      if (actxRef.current && actxRef.current.state === 'suspended') actxRef.current.resume(); 
+    const unlockAudio = () => {
+      if (actxRef.current && actxRef.current.state === 'suspended') actxRef.current.resume();
     };
     window.addEventListener('click', unlockAudio);
     window.addEventListener('touchstart', unlockAudio);
-    return () => { 
-      window.removeEventListener('click', unlockAudio); 
-      window.removeEventListener('touchstart', unlockAudio); 
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
     };
   }, []);
-  
 
-  // 4. DEVICE HARDWARE CHANGE DETECTION
+  // 4. DEVICE HARDWARE CHANGE — reset latency calibration when headphones/speakers swap
   useEffect(() => {
     const handleDeviceChange = () => {
       if (stateRef.current.isCalibrated) {
-        toast("Audio hardware changed. Resetting sync...", "inf");
+        toast('Audio hardware changed. Resetting sync...', 'inf');
         stateRef.current.outLat = 0.050;
-        stateRef.current.isCalibrated = false; 
+        stateRef.current.isCalibrated = false;
         if (stateRef.current.localPlayState && audioBufferRef.current) {
-           const currentPos = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
-           applyPlayState(true, currentPos, sNow(), false);
+          const currentPos = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
+          applyPlayState(true, currentPos, sNow(), false);
         }
       }
     };
-    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    if (navigator.mediaDevices?.addEventListener) {
       navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
     }
-    return () => { 
-      if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
-        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange); 
+    return () => {
+      if (navigator.mediaDevices?.removeEventListener) {
+        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 5. SLEEP ARMOR: Protects audio when screen turns on/off
+  // 5. SLEEP ARMOR — ignore drift math for 3s after OS wakes from sleep
   useEffect(() => {
     const handleVisibilityChange = () => {
       stateRef.current.isTransitioningOS = true;
       clearTimeout(sleepArmorTmr.current);
-      
-      // Ignore drift math completely for 3 seconds while the OS throttles the CPU
       sleepArmorTmr.current = setTimeout(() => {
         stateRef.current.isTransitioningOS = false;
       }, 3000);
 
       if (!document.hidden && socketRef.current && !stateRef.current.amHost) {
-        syncClock().then(() => toast("Tab resumed: Re-locking sync...", "inf"));
+        syncClock().then(() => toast('Tab resumed: Re-locking sync...', 'inf'));
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -199,27 +202,27 @@ export default function useHushPodEngine() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 6. ORBIT 3D SPATIAL AUDIO MATH
+  // 6. ORBIT 3D SPATIAL AUDIO MATH — runs every animation frame
   useEffect(() => {
     let raf;
     const runOrbitAudio = () => {
       raf = requestAnimationFrame(runOrbitAudio);
       if (stateRef.current.orbitActive && stateRef.current.localPlayState && pannerNodeRef.current && gainNodeRef.current) {
-        const total = stateRef.current.members.length || 1;
-        const speedMs = Math.max(3000, Math.min(10000, 2000 * total));
-        const globalTime = Date.now() + stateRef.current.clockOff;
-        const radarAngle = ((globalTime % speedMs) / speedMs) * Math.PI * 2;
+        const total    = stateRef.current.members.length || 1;
+        const speedMs  = Math.max(3000, Math.min(10000, 2000 * total));
+        const globalTime  = Date.now() + stateRef.current.clockOff;
+        const radarAngle  = ((globalTime % speedMs) / speedMs) * Math.PI * 2;
 
-        const myIndex = stateRef.current.members.findIndex(m => m.id === socketRef.current.id);
+        const myIndex = stateRef.current.members.findIndex(m => m.id === socketRef.current?.id);
         const myAngle = ((myIndex === -1 ? 0 : myIndex) / total) * Math.PI * 2;
 
         let diff = radarAngle - myAngle;
         while (diff < -Math.PI) diff += Math.PI * 2;
-        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff > Math.PI)  diff -= Math.PI * 2;
 
         if (pannerNodeRef.current.pan) pannerNodeRef.current.pan.value = Math.sin(diff);
 
-        const dist = Math.abs(diff);
+        const dist   = Math.abs(diff);
         const volDrop = Math.max(0.15, 1.0 - (dist / Math.PI));
         gainNodeRef.current.gain.value = stateRef.current.globalVolume * volDrop;
       } else if (pannerNodeRef.current && gainNodeRef.current) {
@@ -231,33 +234,42 @@ export default function useHushPodEngine() {
     return () => cancelAnimationFrame(raf);
   }, [orbitActive, members]);
 
-  // 7. SESSION RESTORE & AUTO-JOIN
+  // 7. SESSION RESTORE — re-joins the room on page reload
   useEffect(() => {
-    const session = sessionStorage.getItem('hushpod_session');
-    if (session) {
-      const { code, name } = JSON.parse(session);
-      setUname(name); 
+    const raw = sessionStorage.getItem('hushpod_session');
+    if (raw) {
+      const { code, name, isHost: wasHost } = JSON.parse(raw);
+      setUname(name);
       setCodeInput(code);
       initSystem().then(() => {
-        socketRef.current.emit('join-room', { code, name, claimHost: false }, (res) => {
-          if (res.error) { 
-            sessionStorage.removeItem('hushpod_session'); 
-            setIsSyncing(false); 
-            return toast(res.error, 'err'); 
+        // FIX: Pass the saved isHost flag so the server can restore the crown
+        // Previously this was hardcoded to claimHost: false, meaning hosts
+        // always lost their DJ controls after a page refresh.
+        socketRef.current.emit('join-room', { code, name, claimHost: !!wasHost }, (res) => {
+          if (res.error) {
+            sessionStorage.removeItem('hushpod_session');
+            setIsSyncing(false);
+            return toast(res.error, 'err');
           }
-          setRoomCode(code); 
-          setMembers(res.members); 
+          setRoomCode(code);
+          setMembers(res.members);
           setQueue(res.queue);
-          setGuestUploads(res.guestUploads); 
-          setGlobalVolume(res.globalVolume); 
-          setOrbitActive(res.orbitActive || false);
-          
-          if(res.currentSong) {
+          setGuestUploads(res.guestUploads);
+          setGlobalVolume(res.globalVolume);
+          if (res.orbitActive !== undefined) setOrbitActive(res.orbitActive);
+
+          if (res.currentSong) {
             setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
-            guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true, res.currentSong.songId, ++loadSessionId.current);
+            guestLoadAndSync(
+              SERVER + res.currentSong.streamUrl,
+              res.playState,
+              true,
+              res.currentSong.songId,
+              ++loadSessionId.current
+            );
           }
-          setIsSyncing(false); 
-          setRoomTab('dj'); 
+          setIsSyncing(false);
+          setRoomTab('dj');
           setView('room');
         });
       });
@@ -267,12 +279,12 @@ export default function useHushPodEngine() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 8. QR URL PARSER
+  // 8. QR URL PARSER — reads ?room=XXXXX from the URL when scanned
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    const params     = new URLSearchParams(window.location.search);
     const roomFromUrl = params.get('room');
     if (roomFromUrl) {
-      setCodeInput(roomFromUrl.toUpperCase()); 
+      setCodeInput(roomFromUrl.toUpperCase());
       setView('app-entry');
       toast(`Scanned! Enter your name to join room ${roomFromUrl.toUpperCase()}`, 'ok');
       window.history.replaceState({}, document.title, window.location.pathname);
@@ -280,7 +292,7 @@ export default function useHushPodEngine() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 9. BACKGROUND WEB WORKER ENGINE (Maintains timing when app is minimized)
+  // 9. BACKGROUND WEB WORKER — keeps timers alive when the tab is hidden
   useEffect(() => {
     if (location.pathname !== '/room') return;
     const workerBlob = new Blob([`
@@ -289,8 +301,8 @@ export default function useHushPodEngine() {
         if (e.data === 'start') {
           tick1 = setInterval(() => self.postMessage('heartbeat'), 1000);
           tick2 = setInterval(() => self.postMessage('clocksync'), 20000);
-        } else if (e.data === 'stop') { 
-          clearInterval(tick1); clearInterval(tick2); 
+        } else if (e.data === 'stop') {
+          clearInterval(tick1); clearInterval(tick2);
         }
       };
     `], { type: 'application/javascript' });
@@ -300,116 +312,117 @@ export default function useHushPodEngine() {
       if (e.data === 'heartbeat') {
         const s = stateRef.current;
         if (s.localPlayState && socketRef.current && s.amHost && audioBufferRef.current) {
-          const now = actxRef.current.currentTime;
+          const now   = actxRef.current.currentTime;
           const delta = now - (s.lastHeartbeatTime || now);
           s.lastHeartbeatTime = now;
-          
-          if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-              s.accumulatedRateDrift += delta * (sourceNodeRef.current.playbackRate.value - 1.0);
+
+          if (sourceNodeRef.current?.playbackRate) {
+            s.accumulatedRateDrift += delta * (sourceNodeRef.current.playbackRate.value - 1.0);
           }
 
           const currentAudioPos = Math.max(0, s.songOffset + (now - s.nodeStartTime) + s.accumulatedRateDrift);
           socketRef.current.emit('heartbeat', { currentTime: currentAudioPos });
 
-          // Triggers next song right before the current one finishes
+          // Auto-advance to next song just before the current one ends
           if (currentAudioPos >= audioBufferRef.current.duration - 0.4 && !s.isTransitioning) {
-              s.isTransitioning = true;
-              playNext(false); 
+            s.isTransitioning = true;
+            playNext(false);
           }
         }
-      } else if (e.data === 'clocksync') { 
-        syncClock(); 
+      } else if (e.data === 'clocksync') {
+        syncClock();
       }
     };
     worker.postMessage('start');
-    return () => { 
-      worker.postMessage('stop'); 
-      worker.terminate(); 
-    };
+    return () => { worker.postMessage('stop'); worker.terminate(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
-  // 10. NATIVE LOCK SCREEN CONTROLS (Android / iOS Media Center)
-  useEffect(() => {
-    if ('mediaSession' in navigator) {
-      // 1. Tell the OS what is currently playing
-      navigator.mediaSession.metadata = new window.MediaMetadata({
-        title: currentSong ? currentSong.name : 'HushPod Party',
-        artist: amHost ? 'DJ ' + uname : roomTitle,
-        album: 'HushPod Live Session',
-        artwork: [
-          { src: 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=512&q=80', sizes: '512x512', type: 'image/jpeg' }
-        ]
-      });
 
-      // 2. Wire up the native OS buttons to your React engine
-      navigator.mediaSession.setActionHandler('play', () => {
-        if (amHost) togglePlay();
-      });
-      
-      navigator.mediaSession.setActionHandler('pause', () => {
-        if (amHost) togglePlay();
-      });
-      
-      navigator.mediaSession.setActionHandler('nexttrack', () => {
-        if (amHost) playNext(true);
-      });
-      
-      navigator.mediaSession.setActionHandler('previoustrack', () => {
-        if (amHost) playPrev();
-      });
-    }
+  // 10. MEDIA SESSION — wires OS lock-screen controls to the engine
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.metadata = new window.MediaMetadata({
+      title:  currentSong ? currentSong.name : 'HushPod Party',
+      artist: amHost ? 'DJ ' + uname : roomTitle,
+      album:  'HushPod Live Session',
+      artwork: [{ src: 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=512&q=80', sizes: '512x512', type: 'image/jpeg' }],
+    });
+    navigator.mediaSession.setActionHandler('play',          () => { if (amHost) togglePlay(); });
+    navigator.mediaSession.setActionHandler('pause',         () => { if (amHost) togglePlay(); });
+    navigator.mediaSession.setActionHandler('nexttrack',     () => { if (amHost) playNext(true); });
+    navigator.mediaSession.setActionHandler('previoustrack', () => { if (amHost) playPrev(); });
   }, [currentSong, amHost, uname, roomTitle]);
 
 
   // ==========================================
-  // CORE FUNCTIONS
+  // CORE AUDIO FUNCTIONS
   // ==========================================
 
   const initSystem = async () => {
     if (!actxRef.current) {
       actxRef.current = new (window.AudioContext || window.webkitAudioContext)();
-      stateRef.current.outLat = Math.max(0.020, Math.min(0.150, actxRef.current.outputLatency || actxRef.current.baseLatency || 0.060));
-      
-      gainNodeRef.current = actxRef.current.createGain();
-      pannerNodeRef.current = actxRef.current.createStereoPanner ? actxRef.current.createStereoPanner() : actxRef.current.createGain();
-      analyserRef.current = actxRef.current.createAnalyser();
+      stateRef.current.outLat = Math.max(
+        0.020,
+        Math.min(0.150, actxRef.current.outputLatency || actxRef.current.baseLatency || 0.060)
+      );
+
+      gainNodeRef.current   = actxRef.current.createGain();
+      pannerNodeRef.current = actxRef.current.createStereoPanner
+        ? actxRef.current.createStereoPanner()
+        : actxRef.current.createGain();
+      analyserRef.current   = actxRef.current.createAnalyser();
       analyserRef.current.fftSize = 128;
-      
-      pannerNodeRef.current.connect(analyserRef.current); 
-      analyserRef.current.connect(gainNodeRef.current); 
+
+      pannerNodeRef.current.connect(analyserRef.current);
+      analyserRef.current.connect(gainNodeRef.current);
       gainNodeRef.current.connect(actxRef.current.destination);
     }
-    
+
     if (actxRef.current.state === 'suspended') actxRef.current.resume();
-    
-    // KEEP-ALIVE FIX: Saved to ref so Garbage Collector doesn't delete it
+
+    // Silent keep-alive audio prevents mobile OS from killing the AudioContext
     if (!keepAliveRef.current) {
-      const silentWav = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
-      keepAliveRef.current = new Audio(silentWav); 
-      keepAliveRef.current.loop = true; 
+      const silentWav = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+      keepAliveRef.current = new Audio(silentWav);
+      keepAliveRef.current.loop = true;
       keepAliveRef.current.play().catch(() => {});
     }
-    
+
     await syncClock();
-    
+
     if (!socketRef.current) {
       socketRef.current = io(SERVER, { transports: ['websocket', 'polling'] });
       setupSocketListeners(socketRef.current);
+
+      // FIX: Handle socket reconnect (e.g. brief network dropout)
+      // Previously the callback ignored the response object, so:
+      // - Room-not-found errors were silent (user stuck in broken state)
+      // - Members and queue were never refreshed after reconnect
       socketRef.current.on('connect', () => {
-         // If we wake up from sleep and already have memory of a room...
-         const savedUname = stateRef.current.uname;
-         const savedCode = stateRef.current.roomCode;
-         
-         if (savedUname && savedCode) {
-           // Re-join and DEMAND the host role if we previously had it
-           socketRef.current.emit('join-room', { 
-             code: savedCode, 
-             name: savedUname, 
-             claimHost: stateRef.current.amHost // THE FIX: Reclaim the crown!
-           }, () => {
-             toast("Connection restored", "ok");
-           });
-         }
+        const savedUname = stateRef.current.uname;
+        const savedCode  = stateRef.current.roomCode;
+
+        if (savedUname && savedCode) {
+          socketRef.current.emit('join-room', {
+            code:       savedCode,
+            name:       savedUname,
+            claimHost:  stateRef.current.amHost,
+          }, (res) => {
+            if (res.error) {
+              // Room expired while we were offline — send user to join screen
+              sessionStorage.removeItem('hushpod_session');
+              toast('Session expired. Please rejoin.', 'err');
+              setIsSyncing(false);
+              setView('app-entry');
+            } else {
+              // Refresh local state from server truth
+              if (res.members) setMembers(res.members);
+              if (res.queue)   setQueue(res.queue);
+              if (res.orbitActive !== undefined) setOrbitActive(res.orbitActive);
+              toast('Connection restored', 'ok');
+            }
+          });
+        }
       });
     }
   };
@@ -418,16 +431,16 @@ export default function useHushPodEngine() {
     const samples = [];
     for (let i = 0; i < 8; i++) {
       try {
-        const ctrl = new AbortController(); 
-        const tid = setTimeout(() => ctrl.abort(), 1000);
-        const t1 = performance.now();
-        const r = await fetch(SERVER + '/clocksync', { cache: 'no-store', signal: ctrl.signal });
-        const t4 = performance.now(); 
+        const ctrl = new AbortController();
+        const tid  = setTimeout(() => ctrl.abort(), 1000);
+        const t1   = performance.now();
+        const r    = await fetch(SERVER + '/clocksync', { cache: 'no-store', signal: ctrl.signal });
+        const t4   = performance.now();
         clearTimeout(tid);
-        const { t } = await r.json(); 
+        const { t } = await r.json();
         if ((t4 - t1) < 150) samples.push({ offset: t + ((t4 - t1) / 2) - Date.now(), rtt: t4 - t1 });
       } catch {}
-      await new Promise(res => setTimeout(res, 40)); 
+      await new Promise(res => setTimeout(res, 40));
     }
     if (samples.length > 0) {
       samples.sort((a, b) => a.rtt - b.rtt);
@@ -437,40 +450,43 @@ export default function useHushPodEngine() {
   };
 
   const stopAudio = () => {
-    if (sourceNodeRef.current) { 
-      try { sourceNodeRef.current.stop(); } catch(e) {} 
-      sourceNodeRef.current.disconnect(); 
-      sourceNodeRef.current = null; 
+    if (sourceNodeRef.current) {
+      try { sourceNodeRef.current.stop(); } catch (e) {}
+      sourceNodeRef.current.disconnect();
+      sourceNodeRef.current = null;
     }
-    stateRef.current.localPlayState = false; 
-    setIsPlaying(false); 
+    stateRef.current.localPlayState = false;
+    setIsPlaying(false);
     cancelAnimationFrame(vizRafRef.current);
   };
 
   const playAudioAt = (songTime, actxTime) => {
-    stopAudio(); 
+    stopAudio();
     if (!audioBufferRef.current) return;
-    
-    sourceNodeRef.current = actxRef.current.createBufferSource();
+
+    sourceNodeRef.current        = actxRef.current.createBufferSource();
     sourceNodeRef.current.buffer = audioBufferRef.current;
     sourceNodeRef.current.connect(pannerNodeRef.current);
 
     sourceNodeRef.current.onended = () => {
       const s = stateRef.current;
-      if (s.localPlayState && !s.isTransitioning && actxRef.current.currentTime >= s.nodeStartTime + audioBufferRef.current.duration - s.songOffset - 0.1) {
+      if (
+        s.localPlayState &&
+        !s.isTransitioning &&
+        actxRef.current.currentTime >= s.nodeStartTime + audioBufferRef.current.duration - s.songOffset - 0.1
+      ) {
         s.isTransitioning = true;
-        playNext(false); 
+        playNext(false);
       }
     };
-    
-    // Wakes OS hardware up from background sleep
+
     if (actxRef.current.state === 'suspended') actxRef.current.resume();
-    
+
     sourceNodeRef.current.start(actxTime, songTime);
-    stateRef.current.songOffset = songTime; 
-    stateRef.current.nodeStartTime = actxTime;
-    stateRef.current.localPlayState = true; 
-    setIsPlaying(true); 
+    stateRef.current.songOffset     = songTime;
+    stateRef.current.nodeStartTime  = actxTime;
+    stateRef.current.localPlayState = true;
+    setIsPlaying(true);
     drawVisualizer();
   };
 
@@ -479,83 +495,240 @@ export default function useHushPodEngine() {
     for (const song of q.slice(0, 2)) {
       if (!trackCacheRef.current[song.id]) {
         try {
-          trackCacheRef.current[song.id] = 'fetching'; 
+          trackCacheRef.current[song.id] = 'fetching';
           const res = await fetch(SERVER + song.streamUrl);
-          trackCacheRef.current[song.id] = await actxRef.current.decodeAudioData(await res.arrayBuffer()); 
-        } catch(e) { delete trackCacheRef.current[song.id]; }
+          trackCacheRef.current[song.id] = await actxRef.current.decodeAudioData(await res.arrayBuffer());
+        } catch (e) { delete trackCacheRef.current[song.id]; }
       }
     }
   };
 
   const guestLoadAndSync = async (url, playState, isNewJoiner = false, songId = null, expectedLoadId) => {
-    stopAudio(); 
+    stopAudio();
     try {
       if (songId && trackCacheRef.current[songId] && trackCacheRef.current[songId] !== 'fetching') {
-        audioBufferRef.current = trackCacheRef.current[songId]; 
-        if (expectedLoadId !== loadSessionId.current) return; 
-        
-        setTrackReady(true); 
+        audioBufferRef.current = trackCacheRef.current[songId];
+        if (expectedLoadId !== loadSessionId.current) return;
+        setTrackReady(true);
         applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       } else {
-        if (!audioBufferRef.current) setTrackReady(false); 
+        if (!audioBufferRef.current) setTrackReady(false);
         if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Buffering next...' });
         if (songId) trackCacheRef.current[songId] = 'fetching';
-        
-        const res = await fetch(url);
+
+        const res     = await fetch(url);
         const decoded = await actxRef.current.decodeAudioData(await res.arrayBuffer());
-        
-        if (expectedLoadId !== loadSessionId.current) return; 
-        
+
+        if (expectedLoadId !== loadSessionId.current) return;
+
         audioBufferRef.current = decoded;
-        if (songId) trackCacheRef.current[songId] = audioBufferRef.current; 
-        
-        setTrackReady(true); 
+        if (songId) trackCacheRef.current[songId] = audioBufferRef.current;
+
+        setTrackReady(true);
         applyPlayState(playState.playing, playState.currentTime, playState.ts, isNewJoiner);
       }
-    } catch(e) { 
+    } catch (e) {
       if (expectedLoadId !== loadSessionId.current) return;
-      setTrackReady(true); 
-      if (!stateRef.current.amHost) setSyncState({ state: 'fixing', label: 'Error loading track' }); 
+      setTrackReady(true);
+      if (!stateRef.current.amHost) setSyncState({ state: 'fixing', label: 'Error loading track' });
     }
   };
 
   const applyPlayState = (playing, currentTime, ts, isNewJoiner = false) => {
     if (!audioBufferRef.current) return;
-    const outLat = stateRef.current.outLat || 0.060;
+    const outLat  = stateRef.current.outLat || 0.060;
     const elapsed = (Date.now() + stateRef.current.clockOff - ts) / 1000;
-    
-    if (!playing) { 
-      stopAudio(); 
-      stateRef.current.songOffset = currentTime; 
-      if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Paused' });
-      return; 
+
+    if (!playing) {
+      stopAudio();
+      stateRef.current.songOffset = currentTime;
+      if (!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Paused' });
+      return;
     }
 
     stateRef.current.accumulatedRateDrift = 0;
-    stateRef.current.lastHeartbeatTime = actxRef.current.currentTime;
-    stateRef.current.isTransitioning = false;
-    
+    stateRef.current.lastHeartbeatTime    = actxRef.current.currentTime;
+    stateRef.current.isTransitioning      = false;
+
     let expectedOffset = currentTime + elapsed + outLat;
-    const hardwareWarmup = 0.100; 
+    const hardwareWarmup = 0.100;
     let startTime = actxRef.current.currentTime + hardwareWarmup;
 
-    if (expectedOffset < 0) { 
-      startTime = actxRef.current.currentTime + Math.abs(expectedOffset); 
-      expectedOffset = 0; 
-    }
-    
-    if (isNewJoiner && !stateRef.current.amHost && expectedOffset > 0) {
-        expectedOffset += hardwareWarmup; 
-        setSyncState({ state: 'synced', label: 'Locked Sync' });
-    } else {
-        if(!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Locked Sync' });
+    if (expectedOffset < 0) {
+      startTime      = actxRef.current.currentTime + Math.abs(expectedOffset);
+      expectedOffset = 0;
     }
 
-    if (expectedOffset >= audioBufferRef.current.duration) { 
-      stopAudio(); 
-      return; 
+    if (isNewJoiner && !stateRef.current.amHost && expectedOffset > 0) {
+      expectedOffset += hardwareWarmup;
+      setSyncState({ state: 'synced', label: 'Locked Sync' });
+    } else {
+      if (!stateRef.current.amHost) setSyncState({ state: 'synced', label: 'Locked Sync' });
     }
+
+    if (expectedOffset >= audioBufferRef.current.duration) { stopAudio(); return; }
     playAudioAt(expectedOffset, startTime);
+  };
+
+
+  // ==========================================
+  // SOCKET EVENT LISTENERS
+  // ==========================================
+
+  const setupSocketListeners = (sock) => {
+    sock.on('song-changed', ({ songId, name, streamUrl, playState }) => {
+      const currentLoadId = ++loadSessionId.current;
+      stopAudio();
+      setCurrentSong({ id: songId, name, duration: 0 });
+      guestLoadAndSync(SERVER + streamUrl, playState, !stateRef.current.amHost, songId, currentLoadId);
+    });
+
+    sock.on('play-scheduled', ({ currentTime, targetTs }) => {
+      if (!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Readying...' });
+      applyPlayState(true, currentTime, targetTs, false);
+    });
+
+    sock.on('playstate', ({ playing, currentTime, ts }) => {
+      if (!stateRef.current.amHost) applyPlayState(playing, currentTime, ts, false);
+    });
+
+    sock.on('heartbeat', ({ currentTime, ts }) => {
+      if (stateRef.current.amHost || !audioBufferRef.current || !stateRef.current.localPlayState) return;
+      const outLat = stateRef.current.outLat || 0.050;
+
+      const rawNetworkDelay = (sNow() - ts) / 1000;
+      // Discard obviously bad readings (>800ms network delay or negative)
+      if (rawNetworkDelay > 0.800 || rawNetworkDelay < -0.100) return;
+      const networkDelay = Math.max(0, rawNetworkDelay);
+
+      const trueHostTime = currentTime + networkDelay;
+      const now   = actxRef.current.currentTime;
+      const delta = now - (stateRef.current.lastHeartbeatTime || now);
+      stateRef.current.lastHeartbeatTime = now;
+
+      if (sourceNodeRef.current?.playbackRate) {
+        stateRef.current.accumulatedRateDrift += delta * (sourceNodeRef.current.playbackRate.value - 1.0);
+      }
+
+      const myActualTime = stateRef.current.songOffset + (now - stateRef.current.nodeStartTime) + stateRef.current.accumulatedRateDrift - outLat;
+      const drift    = trueHostTime - myActualTime;
+      const absDrift = Math.abs(drift);
+
+      // SLEEP ARMOR: Skip correction while OS is throttling after wake
+      if (stateRef.current.isTransitioningOS) return;
+
+      if (absDrift > 0.250) {
+        // Hard re-sync — drift too large, must seek
+        applyPlayState(true, trueHostTime + outLat, sNow(), false);
+      } else if (absDrift > 0.040 && sourceNodeRef.current?.playbackRate) {
+        // Soft correction — nudge playback rate slightly
+        sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.015 : 0.985;
+      } else if (sourceNodeRef.current?.playbackRate) {
+        // Back to normal speed — within deadzone
+        if (sourceNodeRef.current.playbackRate.value !== 1.0) sourceNodeRef.current.playbackRate.value = 1.0;
+      }
+    });
+
+    sock.on('queue-updated', ({ queue }) => { setQueue(queue); prefetchQueue(queue); });
+
+    sock.on('chat-msg', ({ name, text }) => {
+      setChat(prev => [...prev, { name, text }]);
+      if (name !== stateRef.current.uname) toast(`💬 ${name}: ${text}`, 'inf');
+    });
+
+    // FIX: Previously, setOrbitActive(s.orbitActive) would set orbit to undefined
+    // whenever any setting was changed (guest uploads, volume, etc.) because those
+    // events didn't include orbitActive. This silently killed orbit mode mid-session.
+    sock.on('settings-updated', (s) => {
+      setGuestUploads(s.guestUploads);
+      setGlobalVolume(s.globalVolume);
+      if (s.orbitActive !== undefined) setOrbitActive(s.orbitActive);
+      if (gainNodeRef.current && actxRef.current && !s.orbitActive) {
+        gainNodeRef.current.gain.value = s.globalVolume;
+      }
+    });
+
+    sock.on('member-joined', ({ members }) => { setMembers(members); });
+
+    // FIX: Added hostAway flag — when host briefly disconnects (30s grace period),
+    // guests now see an informative message instead of a confusing instant host transfer.
+    sock.on('member-left', ({ members, newHostName, hostAway }) => {
+      setMembers(members);
+      if (hostAway) {
+        toast('Host lost connection. Waiting 30s for them to return...', 'inf');
+      } else if (newHostName) {
+        toast(`👑 ${newHostName} is the new Host!`, 'ok');
+      }
+    });
+  };
+
+
+  // ==========================================
+  // ROOM ACTIONS
+  // ==========================================
+
+  const attemptCreateRoom = () => {
+    if (!uname.trim()) return toast('Enter your name first', 'err');
+    setPendingAction('create');
+    setTosChecked(false);
+    setModals({ ...modals, tos: true });
+  };
+
+  const attemptJoinRoom = () => {
+    if (!uname.trim() || codeInput.length < 3) return toast('Enter name and code', 'err');
+    setPendingAction('join');
+    setTosChecked(false);
+    setModals({ ...modals, tos: true });
+  };
+
+  const confirmTosAndExecute = async () => {
+    if (!tosChecked) return;
+    setModals({ ...modals, tos: false });
+
+    if (pendingAction === 'create') {
+      setIsSyncing(true);
+      await initSystem();
+      socketRef.current.emit('create-room', { name: uname }, (res) => {
+        setRoomCode(res.code);
+        setMembers([{ id: socketRef.current.id, name: uname, isHost: true }]);
+        // FIX: Save isHost:true so page-refresh can send claimHost:true to server
+        sessionStorage.setItem('hushpod_session', JSON.stringify({ code: res.code, name: uname, isHost: true }));
+        setIsSyncing(false);
+        setRoomTab('dj');
+        setView('room');
+        window.scrollTo(0, 0);
+      });
+    } else if (pendingAction === 'join') {
+      setIsSyncing(true);
+      await initSystem();
+      socketRef.current.emit('join-room', { code: codeInput, name: uname, claimHost: false }, (res) => {
+        if (res.error) { setIsSyncing(false); return toast(res.error, 'err'); }
+        // FIX: Save isHost from the server response (guests who later become host
+        // will have this updated via the member-joined event + sessionStorage update below)
+        sessionStorage.setItem('hushpod_session', JSON.stringify({ code: codeInput, name: uname, isHost: res.isHost || false }));
+        setRoomCode(codeInput);
+        setMembers(res.members);
+        setQueue(res.queue);
+        setGuestUploads(res.guestUploads);
+        setGlobalVolume(res.globalVolume);
+        if (res.orbitActive !== undefined) setOrbitActive(res.orbitActive);
+
+        if (res.currentSong) {
+          setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
+          guestLoadAndSync(
+            SERVER + res.currentSong.streamUrl,
+            res.playState,
+            true,
+            res.currentSong.songId,
+            ++loadSessionId.current
+          );
+        }
+        setIsSyncing(false);
+        setRoomTab('dj');
+        setView('room');
+        window.scrollTo(0, 0);
+      });
+    }
   };
 
 
@@ -568,6 +741,7 @@ export default function useHushPodEngine() {
   };
 
   const playNext = (isManualClick = false) => {
+    // Always read from stateRef to avoid stale closures in web worker callbacks
     if (!stateRef.current.amHost) return;
     const s = stateRef.current;
     const q = s.queue;
@@ -587,7 +761,7 @@ export default function useHushPodEngine() {
       } else if (s.loopMode === 'queue' || s.loopMode === 'song') {
         socketRef.current.emit('play-song', { songId: q[0].id, autoPlay: true });
       } else {
-        socketRef.current.emit('song-ended', {}); 
+        socketRef.current.emit('song-ended', {});
         setCurrentSong(null);
       }
     }
@@ -603,32 +777,34 @@ export default function useHushPodEngine() {
     if (idx > 0) {
       socketRef.current.emit('play-song', { songId: q[idx - 1].id, autoPlay: true });
     } else {
-      socketRef.current.emit('play-song', { songId: q[0].id, autoPlay: true }); 
+      socketRef.current.emit('play-song', { songId: q[0].id, autoPlay: true });
     }
   };
 
   const togglePlay = () => {
-    if (!amHost) return;
-    const s = stateRef.current;
-    let cur = s.localPlayState ? s.songOffset + (actxRef.current.currentTime - s.nodeStartTime) : s.songOffset;
-    
-    if (!s.localPlayState) { 
-      socketRef.current.emit('schedule-play', { currentTime: cur }); 
-    } else { 
-      socketRef.current.emit('playstate', { playing: false, currentTime: cur, ts: sNow() }); 
-      applyPlayState(false, cur, sNow(), false); 
+    if (!stateRef.current.amHost) return;
+    const s   = stateRef.current;
+    const cur = s.localPlayState
+      ? s.songOffset + (actxRef.current.currentTime - s.nodeStartTime)
+      : s.songOffset;
+
+    if (!s.localPlayState) {
+      socketRef.current.emit('schedule-play', { currentTime: cur });
+    } else {
+      socketRef.current.emit('playstate', { playing: false, currentTime: cur, ts: sNow() });
+      applyPlayState(false, cur, sNow(), false);
     }
   };
 
   const seekClick = (e) => {
-    if (!amHost || !audioBufferRef.current) return;
-    const r = e.currentTarget.getBoundingClientRect();
+    if (!stateRef.current.amHost || !audioBufferRef.current) return;
+    const r       = e.currentTarget.getBoundingClientRect();
     const percent = (e.clientX - r.left) / r.width;
     handleSeek(Math.max(0, Math.min(audioBufferRef.current.duration, percent * audioBufferRef.current.duration)));
   };
 
   const handleSeek = (newTime) => {
-    if (!amHost || !audioBufferRef.current) return;
+    if (!stateRef.current.amHost || !audioBufferRef.current) return;
     socketRef.current.emit('playstate', { playing: stateRef.current.localPlayState, currentTime: newTime, ts: sNow() });
     applyPlayState(stateRef.current.localPlayState, newTime, sNow(), false);
   };
@@ -636,287 +812,172 @@ export default function useHushPodEngine() {
   const drawVisualizer = () => {
     if (!stateRef.current.localPlayState || !analyserRef.current) return;
     vizRafRef.current = requestAnimationFrame(drawVisualizer);
-    
+
     const cvs = document.getElementById('viz-canvas');
-    if(!cvs) return; 
-    
-    const ctx = cvs.getContext('2d'); 
-    if(!ctx) return;
-    
-    const W = cvs.width = cvs.offsetWidth; 
+    if (!cvs) return;
+    const ctx = cvs.getContext('2d');
+    if (!ctx) return;
+
+    const W = cvs.width  = cvs.offsetWidth;
     const H = cvs.height = cvs.offsetHeight;
-    
+
     const data = new Uint8Array(analyserRef.current.frequencyBinCount);
-    analyserRef.current.getByteFrequencyData(data); 
+    analyserRef.current.getByteFrequencyData(data);
     ctx.clearRect(0, 0, W, H);
-    
+
     const pColor = getComputedStyle(document.body).getPropertyValue('--cyan').trim() || '#4cc9f0';
-    const bw = (W / data.length) * 2.5; 
+    const bw = (W / data.length) * 2.5;
     let x = 0;
-    
-    for(let i=0; i<data.length; i++) {
+
+    for (let i = 0; i < data.length; i++) {
       const bh = (data[i] / 255) * H;
-      ctx.fillStyle = pColor; 
-      ctx.fillRect(x, H - bh, bw, bh); 
+      ctx.fillStyle = pColor;
+      ctx.fillRect(x, H - bh, bw, bh);
       x += bw + 1;
     }
-    
-    let currentPos = Math.max(0, Math.min(stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime), audioBufferRef.current?.duration || 1));
+
+    const currentPos = Math.max(
+      0,
+      Math.min(
+        stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime),
+        audioBufferRef.current?.duration || 1
+      )
+    );
     if (progFillRef.current) progFillRef.current.style.width = (currentPos / (audioBufferRef.current?.duration || 1) * 100) + '%';
-    if (tCurRef.current) tCurRef.current.textContent = fmt(currentPos);
+    if (tCurRef.current)     tCurRef.current.textContent = fmt(currentPos);
   };
 
+  // FIX: toggleMusicalChairs' setTimeout callback now reads stateRef.current.amHost
+  // instead of the React-state amHost, preventing the stale closure issue where
+  // the timeout fires but amHost is already false (e.g. after host change).
   const toggleMusicalChairs = () => {
-    if (!amHost) return;
+    if (!stateRef.current.amHost) return;
+
     if (musicalChairActive) {
       clearTimeout(musicalChairTimer.current);
       setMusicalChairActive(false);
-      if (stateRef.current.localPlayState) togglePlay(); 
+      if (stateRef.current.localPlayState) togglePlay();
     } else {
       setMusicalChairActive(true);
-      if (!stateRef.current.localPlayState) togglePlay(); 
-      
+      if (!stateRef.current.localPlayState) togglePlay();
+
       const randomTimeMs = Math.floor(Math.random() * 10000) + 5000;
-      toast(`Party Roulette started! Stopping in ${(randomTimeMs/1000).toFixed(1)}s...`, "inf");
-      
+      toast(`Party Roulette started! Stopping in ${(randomTimeMs / 1000).toFixed(1)}s...`, 'inf');
+
       musicalChairTimer.current = setTimeout(() => {
+        if (!stateRef.current.amHost) return; // Safety: only act if still host
         setMusicalChairActive(false);
-        togglePlay(); 
-        toast("🛑 MUSIC STOPPED!", "ok");
+        if (stateRef.current.localPlayState) togglePlay();
+        toast('🛑 MUSIC STOPPED!', 'ok');
       }, randomTimeMs);
-    }
-  };
-
-  const runSonarCalibration = async () => {
-    if (!actxRef.current) return toast("Audio not initialized. Play a track first.", "err");
-    toast("Calibrating... Keep the room quiet!", "inf");
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-      const micSource = actxRef.current.createMediaStreamSource(stream);
-      const micAnalyser = actxRef.current.createAnalyser();
-      micSource.connect(micAnalyser);
-      const bufferLength = micAnalyser.frequencyBinCount;
-      const dataArray = new Uint8Array(bufferLength);
-      const startTime = performance.now();
-      
-      const osc = actxRef.current.createOscillator();
-      const clickGain = actxRef.current.createGain();
-      osc.type = 'sine'; osc.frequency.setValueAtTime(1200, actxRef.current.currentTime);
-      clickGain.gain.setValueAtTime(0, actxRef.current.currentTime);
-      clickGain.gain.linearRampToValueAtTime(1, actxRef.current.currentTime + 0.002);
-      clickGain.gain.linearRampToValueAtTime(0, actxRef.current.currentTime + 0.010);
-      
-      osc.connect(clickGain); clickGain.connect(actxRef.current.destination);
-      osc.start(); 
-      osc.stop(actxRef.current.currentTime + 0.02);
-
-      const checkMic = () => {
-        micAnalyser.getByteFrequencyData(dataArray);
-        let volume = 0; 
-        for (let i = 0; i < bufferLength; i++) {
-          if (dataArray[i] > volume) volume = dataArray[i];
-        }
-
-        if (volume > 180) { 
-          const latencySec = (performance.now() - startTime) / 1000;
-          stateRef.current.outLat = Math.max(0.010, Math.min(0.600, latencySec));
-          toast(`Sync Locked: ${(latencySec * 1000).toFixed(0)}ms latency detected`, "ok");
-          stream.getTracks().forEach(t => t.stop());
-        } else if (performance.now() - startTime < 2000) {
-          requestAnimationFrame(checkMic);
-        } else { 
-          toast("Calibration failed. Turn up the volume and try again.", "err"); 
-          stream.getTracks().forEach(t => t.stop()); 
-        }
-      };
-      checkMic();
-    } catch (err) { toast("Microphone access is required for Sonar Calibration.", "err"); }
-  };
-
-  const setupSocketListeners = (sock) => {
-    sock.on('song-changed', ({ songId, name, streamUrl, playState }) => {
-      const currentLoadId = ++loadSessionId.current;
-      stopAudio(); 
-      setCurrentSong({ id: songId, name, duration: 0 });
-      guestLoadAndSync(SERVER + streamUrl, playState, !stateRef.current.amHost, songId, currentLoadId);
-    });
-    
-    sock.on('play-scheduled', ({ currentTime, targetTs }) => {
-      if(!stateRef.current.amHost) setSyncState({ state: 'syncing', label: 'Readying...' });
-      applyPlayState(true, currentTime, targetTs, false);
-    });
-    
-    sock.on('playstate', ({ playing, currentTime, ts }) => { 
-      if(!stateRef.current.amHost) applyPlayState(playing, currentTime, ts, false); 
-    });
-    
-    sock.on('heartbeat', ({ currentTime, ts }) => {
-      if (stateRef.current.amHost || !audioBufferRef.current || !stateRef.current.localPlayState) return;
-      const outLat = stateRef.current.outLat || 0.050; 
-      
-      const rawNetworkDelay = (sNow() - ts) / 1000;
-      if (rawNetworkDelay > 0.800 || rawNetworkDelay < -0.100) return; 
-      const networkDelay = Math.max(0, rawNetworkDelay);       
-      
-      const trueHostTime = currentTime + networkDelay;
-      const now = actxRef.current.currentTime;
-      const delta = now - (stateRef.current.lastHeartbeatTime || now);
-      stateRef.current.lastHeartbeatTime = now;
-
-      if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          stateRef.current.accumulatedRateDrift += delta * (sourceNodeRef.current.playbackRate.value - 1.0);
-      }
-
-      const myActualTime = stateRef.current.songOffset + (now - stateRef.current.nodeStartTime) + stateRef.current.accumulatedRateDrift - outLat;
-      const drift = trueHostTime - myActualTime;
-      const absDrift = Math.abs(drift);
-
-      // SLEEP ARMOR: If OS is throttling CPU, ignore lag completely to prevent audio corruption
-      if (stateRef.current.isTransitioningOS) return;
-
-      // Widened deadzone to 40ms to prevent Wi-Fi stuttering
-      if (absDrift > 0.250) {
-          applyPlayState(true, trueHostTime + outLat, sNow(), false);
-      }
-      else if (absDrift > 0.040 && sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          sourceNodeRef.current.playbackRate.value = drift > 0 ? 1.015 : 0.985;
-      } 
-      else if (sourceNodeRef.current && sourceNodeRef.current.playbackRate) {
-          if (sourceNodeRef.current.playbackRate.value !== 1.0) sourceNodeRef.current.playbackRate.value = 1.0;
-      }
-    });
-
-    sock.on('queue-updated', ({ queue }) => { setQueue(queue); prefetchQueue(queue); });
-    sock.on('chat-msg', ({ name, text }) => { 
-      setChat(prev => [...prev, { name, text }]); 
-      if (name !== stateRef.current.uname) toast(`💬 ${name}: ${text}`, 'inf'); 
-    });
-    sock.on('settings-updated', (s) => {
-      setGuestUploads(s.guestUploads); 
-      setGlobalVolume(s.globalVolume); 
-      setOrbitActive(s.orbitActive);
-      if (gainNodeRef.current && actxRef.current && !s.orbitActive) gainNodeRef.current.gain.value = s.globalVolume;
-    });
-    sock.on('member-joined', ({ members }) => { setMembers(members); });
-    
-    // NEW: We listen for the backend to tell us who the new host is!
-    sock.on('member-left', ({ members, newHostName }) => { 
-      setMembers(members); 
-      if (newHostName) toast(`👑 ${newHostName} is the new Host!`, 'ok');
-    });
-
-    // We completely deleted the 'host-left' kickout rule!
-  };
-
-  const attemptCreateRoom = () => {
-    if (!uname.trim()) return toast('Enter your name first', 'err');
-    setPendingAction('create'); 
-    setTosChecked(false); 
-    setModals({ ...modals, tos: true });
-  };
-
-  const attemptJoinRoom = () => {
-    if (!uname.trim() || codeInput.length < 3) return toast('Enter name and code', 'err');
-    setPendingAction('join'); 
-    setTosChecked(false); 
-    setModals({ ...modals, tos: true });
-  };
-
-  const confirmTosAndExecute = async () => {
-    if (!tosChecked) return;
-    setModals({ ...modals, tos: false });
-    if (pendingAction === 'create') {
-      setIsSyncing(true); await initSystem();
-      socketRef.current.emit('create-room', { name: uname }, (res) => {
-        setRoomCode(res.code); 
-        setMembers([{ id: socketRef.current.id, name: uname, isHost: true }]);
-        sessionStorage.setItem('hushpod_session', JSON.stringify({ code: res.code, name: uname }));
-        setIsSyncing(false); 
-        setRoomTab('dj'); 
-        setView('room'); 
-        window.scrollTo(0,0);
-      });
-    } 
-    else if (pendingAction === 'join') {
-      setIsSyncing(true); await initSystem();
-      socketRef.current.emit('join-room', { code: codeInput, name: uname, claimHost: false }, (res) => {
-        if (res.error) { setIsSyncing(false); return toast(res.error, 'err'); }
-        sessionStorage.setItem('hushpod_session', JSON.stringify({ code: codeInput, name: uname }));
-        setRoomCode(codeInput); 
-        setMembers(res.members); 
-        setQueue(res.queue);
-        setGuestUploads(res.guestUploads); 
-        setGlobalVolume(res.globalVolume); 
-        setOrbitActive(res.orbitActive || false);
-        
-        if(res.currentSong) {
-          setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
-          guestLoadAndSync(SERVER + res.currentSong.streamUrl, res.playState, true, res.currentSong.songId, ++loadSessionId.current);
-        }
-        setIsSyncing(false); 
-        setRoomTab('dj'); 
-        setView('room'); 
-        window.scrollTo(0,0);
-      });
     }
   };
 
   const uploadSongs = (files) => {
     if (!files || files.length === 0) return;
-    if (!amHost && !guestUploads) return toast('Host has locked uploads', 'err');
-    
+    if (!stateRef.current.amHost && !guestUploads) return toast('Host has locked uploads', 'err');
+
     let filesToUpload = Array.from(files);
-    if (filesToUpload.length > 10) { 
-      toast('Max 10 files allowed. Slicing list.', 'inf'); 
-      filesToUpload = filesToUpload.slice(0, 10); 
+    if (filesToUpload.length > 10) {
+      toast('Max 10 files allowed. Slicing list.', 'inf');
+      filesToUpload = filesToUpload.slice(0, 10);
     }
 
-    setUploadProgress(1); 
+    setUploadProgress(1);
     const fd = new FormData();
-    for (let i = 0; i < filesToUpload.length; i++) {
-      fd.append('songs', filesToUpload[i]);
-    }
+    filesToUpload.forEach(f => fd.append('songs', f));
     fd.append('uploaderId', socketRef.current.id);
-    
-    const xhr = new XMLHttpRequest(); 
+
+    const xhr = new XMLHttpRequest();
     xhr.open('POST', SERVER + '/upload/' + roomCode);
-    xhr.upload.onprogress = (e) => { 
-      if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100)); 
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100));
     };
-    xhr.onload = () => { 
-      setUploadProgress(0); 
-      if (xhr.status !== 200) toast('Upload failed', 'err'); 
-      const fileInput = document.getElementById('q-file'); 
-      if (fileInput) fileInput.value = "";
+    xhr.onload = () => {
+      setUploadProgress(0);
+      if (xhr.status !== 200) toast('Upload failed', 'err');
+      const fileInput = document.getElementById('q-file');
+      if (fileInput) fileInput.value = '';
     };
+    xhr.onerror = () => { setUploadProgress(0); toast('Upload failed — check connection', 'err'); };
     xhr.send(fd);
   };
 
   const handleGlobalVolume = (e) => {
-    if(!amHost) return;
+    if (!stateRef.current.amHost) return;
     const val = parseFloat(e.target.value);
-    setGlobalVolume(val); 
+    setGlobalVolume(val);
     socketRef.current.emit('set-global-volume', { volume: val });
     if (gainNodeRef.current && actxRef.current && !orbitActive) {
       gainNodeRef.current.gain.value = val;
     }
   };
-  
+
   const handleDrop = (e, index) => {
     e.preventDefault();
     if (draggedIdx === null || draggedIdx === index) return;
-    const newQ = [...queue]; 
-    const [moved] = newQ.splice(draggedIdx, 1); 
+    const newQ = [...queue];
+    const [moved] = newQ.splice(draggedIdx, 1);
     newQ.splice(index, 0, moved);
-    setQueue(newQ); 
-    socketRef.current.emit('reorder-queue', { newOrder: newQ.map(q => q.id) }); 
+    setQueue(newQ);
+    socketRef.current.emit('reorder-queue', { newOrder: newQ.map(q => q.id) });
     setDraggedIdx(null);
   };
+
+  const runSonarCalibration = async () => {
+    if (!actxRef.current) return toast('Audio not initialized. Play a track first.', 'err');
+    toast('Calibrating... Keep the room quiet!', 'inf');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+      const micSource  = actxRef.current.createMediaStreamSource(stream);
+      const micAnalyser = actxRef.current.createAnalyser();
+      micSource.connect(micAnalyser);
+      const bufferLength = micAnalyser.frequencyBinCount;
+      const dataArray    = new Uint8Array(bufferLength);
+      const startTime    = performance.now();
+
+      const osc       = actxRef.current.createOscillator();
+      const clickGain = actxRef.current.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1200, actxRef.current.currentTime);
+      clickGain.gain.setValueAtTime(0, actxRef.current.currentTime);
+      clickGain.gain.linearRampToValueAtTime(1, actxRef.current.currentTime + 0.002);
+      clickGain.gain.linearRampToValueAtTime(0, actxRef.current.currentTime + 0.010);
+      osc.connect(clickGain);
+      clickGain.connect(actxRef.current.destination);
+      osc.start();
+      osc.stop(actxRef.current.currentTime + 0.02);
+
+      const checkMic = () => {
+        micAnalyser.getByteFrequencyData(dataArray);
+        let volume = 0;
+        for (let i = 0; i < bufferLength; i++) { if (dataArray[i] > volume) volume = dataArray[i]; }
+
+        if (volume > 180) {
+          const latencySec = (performance.now() - startTime) / 1000;
+          stateRef.current.outLat       = Math.max(0.010, Math.min(0.600, latencySec));
+          stateRef.current.isCalibrated = true;
+          toast(`Sync Locked: ${(latencySec * 1000).toFixed(0)}ms latency detected`, 'ok');
+          stream.getTracks().forEach(t => t.stop());
+        } else if (performance.now() - startTime < 2000) {
+          requestAnimationFrame(checkMic);
+        } else {
+          toast('Calibration failed. Turn up volume and try again.', 'err');
+          stream.getTracks().forEach(t => t.stop());
+        }
+      };
+      checkMic();
+    } catch (err) {
+      toast('Microphone access is required for Sonar Calibration.', 'err');
+    }
+  };
+
 
   // ==========================================
   // EXPORTS
   // ==========================================
-
   return {
     setView, toastData, modals, setModals, uploadProgress, roomTab, setRoomTab,
     uname, setUname, roomCode, isSyncing, codeInput, setCodeInput, members,
@@ -926,6 +987,6 @@ export default function useHushPodEngine() {
     tosChecked, setTosChecked, socketRef, actxRef, audioBufferRef, progFillRef, tCurRef,
     stateRef, fmt, seekClick, handleSeek, togglePlay, uploadSongs, handleDrop,
     attemptCreateRoom, attemptJoinRoom, confirmTosAndExecute, runSonarCalibration,
-    amHost, roomTitle, playNext, playPrev, musicalChairActive, toggleMusicalChairs
+    amHost, roomTitle, playNext, playPrev, musicalChairActive, toggleMusicalChairs,
   };
 }
