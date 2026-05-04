@@ -5,8 +5,9 @@ export default function DJDesk({
   isPlaying, trackReady, progFillRef, tCurRef, audioBufferRef, fmt, seekClick,
   isShuffle, setIsShuffle, handleSeek, stateRef, actxRef, togglePlay,
   loopMode, toggleLoopMode, queue, draggedIdx, setDraggedIdx, handleDrop, socketRef,
-  playNext, playPrev 
+  playNext, playPrev
 }) {
+  const [searchQ, setSearchQ] = React.useState('');
   return (
     <>
       <div style={{ background: 'rgba(247,37,133,0.05)', border: '1px solid rgba(247,37,133,0.2)', borderRadius: '8px', padding: '10px 14px', marginBottom: '15px', fontSize: '12px', color: 'var(--sub)', display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -83,18 +84,66 @@ export default function DJDesk({
       </div>
 
       <div className="card">
-        <div className="card-label">Queue {(amHost || guestUploads) && currentSong && <button className="btn-ghost" style={{margin:0, padding: '4px 10px', width:'auto', borderRadius:'6px', fontSize:'11px'}} onClick={() => document.getElementById('q-file')?.click()}>+ Add</button>}</div>
+        <div className="card-label">
+          Queue {(amHost || guestUploads) && currentSong && (
+            <button className="btn-ghost" style={{margin:0, padding:'4px 10px', width:'auto', borderRadius:'6px', fontSize:'11px'}} onClick={() => document.getElementById('q-file')?.click()}>+ Add</button>
+          )}
+        </div>
         {(amHost || guestUploads) && <input type="file" id="q-file" style={{display:'none'}} accept="audio/*" multiple onChange={e => uploadSongs(e.target.files)} />}
+
+        {/* Queue search — only show when there are enough songs to need it */}
+        {queue.length >= 4 && (
+          <div style={{position:'relative', marginBottom:'10px'}}>
+            <span style={{position:'absolute', left:'12px', top:'50%', transform:'translateY(-50%)', color:'var(--sub)', fontSize:'13px'}}>🔍</span>
+            <input
+              type="text"
+              value={searchQ}
+              onChange={e => setSearchQ(e.target.value)}
+              placeholder="Search queue..."
+              style={{width:'100%', padding:'8px 12px 8px 32px', background:'var(--s2)', border:'1px solid var(--border)', borderRadius:'8px', color:'var(--text)', outline:'none', fontSize:'13px', boxSizing:'border-box'}}
+            />
+            {searchQ && (
+              <button onClick={() => setSearchQ('')} style={{position:'absolute', right:'10px', top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:'var(--sub)', cursor:'pointer', fontSize:'16px', padding:0}}>×</button>
+            )}
+          </div>
+        )}
+
         <div style={{display:'flex', flexDirection:'column', gap:'8px'}}>
-          {queue.length === 0 ? <div style={{fontSize:'13px', color:'var(--sub)', textAlign:'center', padding:'12px 0'}}>No songs queued</div> : queue.map((s, i) => (
-            <div key={s.id} draggable={amHost} onDragStart={() => setDraggedIdx(i)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleDrop(e, i)} style={{background:'var(--s2)', padding:'10px 14px', borderRadius:'12px', fontSize:'14px', display:'flex', justifyContent:'space-between', alignItems:'center', border: currentSong?.id === s.id ? '1px solid var(--pink)' : '1px solid var(--border)', fontWeight:'500', cursor: amHost ? 'grab' : 'default', opacity: draggedIdx === i ? 0.5 : 1}}>
-              {amHost && <span style={{marginRight:'10px', cursor:'grab', color:'var(--sub)'}}>☰</span>}
-              <div style={{flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{s.name}</div>
-              {amHost && currentSong?.id !== s.id && <button className="btn-ghost" style={{fontSize:'12px', color:'var(--cyan)', fontWeight:'600', padding:'4px 10px', borderRadius:'6px', border:'1px solid rgba(76,201,240,.3)', background:'var(--s3)', cursor:'pointer', flexShrink:0, width:'auto', margin:0}} onClick={() => socketRef.current.emit('play-song', { songId: s.id, autoPlay: true })}>Play</button>}
-              {currentSong?.id === s.id && <span style={{fontSize:'11px', color:'var(--cyan)', fontWeight:'bold'}}>NOW</span>}
-              {currentSong?.id !== s.id && !amHost && <button className="btn-ghost" style={{background:'var(--s3)', color:'var(--cyan)', border:'1px solid rgba(76,201,240,.3)', padding:'4px 10px', borderRadius:'6px', cursor:'pointer', fontWeight:'700', fontSize:'11px', width:'auto', margin:0}} onClick={() => socketRef.current.emit('upvote', { songId: s.id })}>▲ {s.upvotes || 0}</button>}
-            </div>
-          ))}
+          {(() => {
+            const filtered = searchQ.trim()
+              ? queue.filter(s => s.name.toLowerCase().includes(searchQ.toLowerCase()))
+              : queue;
+
+            if (queue.length === 0) return (
+              <div style={{fontSize:'13px', color:'var(--sub)', textAlign:'center', padding:'12px 0'}}>No songs queued</div>
+            );
+            if (filtered.length === 0) return (
+              <div style={{fontSize:'13px', color:'var(--sub)', textAlign:'center', padding:'12px 0'}}>No songs match "{searchQ}"</div>
+            );
+
+            return filtered.map((s, i) => {
+              const realIdx = queue.findIndex(q => q.id === s.id);
+              return (
+                <div key={s.id}
+                  draggable={amHost && !searchQ}
+                  onDragStart={() => setDraggedIdx(realIdx)}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => handleDrop(e, realIdx)}
+                  style={{background:'var(--s2)', padding:'10px 14px', borderRadius:'12px', fontSize:'14px', display:'flex', justifyContent:'space-between', alignItems:'center', border: currentSong?.id === s.id ? '1px solid var(--pink)' : '1px solid var(--border)', fontWeight:'500', cursor: amHost && !searchQ ? 'grab' : 'default', opacity: draggedIdx === realIdx ? 0.5 : 1}}
+                >
+                  {amHost && !searchQ && <span style={{marginRight:'10px', cursor:'grab', color:'var(--sub)'}}>☰</span>}
+                  <div style={{flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{s.name}</div>
+                  {amHost && currentSong?.id !== s.id && (
+                    <button className="btn-ghost" style={{fontSize:'12px', color:'var(--cyan)', fontWeight:'600', padding:'4px 10px', borderRadius:'6px', border:'1px solid rgba(76,201,240,.3)', background:'var(--s3)', cursor:'pointer', flexShrink:0, width:'auto', margin:0}} onClick={() => socketRef.current.emit('play-song', { songId: s.id, autoPlay: true })}>Play</button>
+                  )}
+                  {currentSong?.id === s.id && <span style={{fontSize:'11px', color:'var(--cyan)', fontWeight:'bold'}}>NOW</span>}
+                  {currentSong?.id !== s.id && !amHost && (
+                    <button className="btn-ghost" style={{background:'var(--s3)', color:'var(--cyan)', border:'1px solid rgba(76,201,240,.3)', padding:'4px 10px', borderRadius:'6px', cursor:'pointer', fontWeight:'700', fontSize:'11px', width:'auto', margin:0}} onClick={() => socketRef.current.emit('upvote', { songId: s.id })}>▲ {s.upvotes || 0}</button>
+                  )}
+                </div>
+              );
+            });
+          })()}
         </div>
       </div>
     </>

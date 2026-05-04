@@ -1,26 +1,28 @@
 import React, { useState, useEffect } from 'react';
 
 export default function Home({ setView }) {
-  const [activeRooms, setActiveRooms] = useState(4);
+  const [stats, setStats] = useState({ rooms: 0, listeners: 0 });
   const [openFaq, setOpenFaq] = useState(null);
 
   useEffect(() => {
+    // Fetch real live stats from the backend
+    const fetchStats = () => {
+      fetch('/stats')
+        .then(r => r.json())
+        .then(d => setStats(d))
+        .catch(() => {}); // silently fail — stats are cosmetic
+    };
+    fetchStats();
+    const interval = setInterval(fetchStats, 30000); // refresh every 30s
+
     const observer = new IntersectionObserver(entries => {
       entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
     }, { threshold: 0.12 });
-    
     setTimeout(() => {
       document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
     }, 100);
 
-    const interval = setInterval(() => {
-      setActiveRooms(prev => Math.max(1, prev + (Math.random() > 0.5 ? 1 : -1)));
-    }, 7000);
-
-    return () => {
-      observer.disconnect();
-      clearInterval(interval);
-    };
+    return () => { observer.disconnect(); clearInterval(interval); };
   }, []);
 
   useEffect(() => {
@@ -71,11 +73,11 @@ export default function Home({ setView }) {
           </div>
 
           <div className="hero-proof">
-            <div className="proof-item"><div className="proof-num">{activeRooms}</div><div className="proof-label">Active Rooms</div></div>
+            <div className="proof-item"><div className="proof-num">{stats.rooms || 0}</div><div className="proof-label">Active Rooms</div></div>
+            <div className="proof-div"></div>
+            <div className="proof-item"><div className="proof-num">{stats.listeners || 0}</div><div className="proof-label">Live Listeners</div></div>
             <div className="proof-div"></div>
             <div className="proof-item"><div className="proof-num">&lt;100ms</div><div className="proof-label">Sync Precision</div></div>
-            <div className="proof-div"></div>
-            <div className="proof-item"><div className="proof-num">15</div><div className="proof-label">Listeners Free</div></div>
             <div className="proof-div"></div>
             <div className="proof-item"><div className="proof-num">0</div><div className="proof-label">Data Stored</div></div>
           </div>

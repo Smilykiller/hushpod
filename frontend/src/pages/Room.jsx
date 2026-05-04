@@ -14,7 +14,8 @@ export default function Room({
   handleSeek, stateRef, actxRef, togglePlay, loopMode, toggleLoopMode, queue, setQueue,
   draggedIdx, setDraggedIdx, handleDrop, members, chat, uname, globalVolume,
   handleGlobalVolume, localVolume, handleLocalVolume, orbitActive, runSonarCalibration,
-  syncState, playNext, playPrev, musicalChairActive, toggleMusicalChairs
+  syncState, playNext, playPrev, musicalChairActive, toggleMusicalChairs,
+  typingUsers, reactions, sendReaction, sendTyping,
 }) {
   
   const [copied, setCopied] = useState(false);
@@ -83,16 +84,15 @@ export default function Room({
           </div>
 
           <div style={{ display: roomTab === 'chat' ? 'block' : 'none' }}>
-            <ChatBox 
-              chat={chat} 
-              uname={uname} 
+          <ChatBox
+              chat={chat}
+              uname={uname}
               amHost={amHost}
-              onSendMessage={(text) => socketRef.current.emit('chat-msg', { 
-                roomCode: roomCode, 
-                code: roomCode, 
-                name: uname, 
-                text: text 
-              })}
+              typingUsers={typingUsers}
+              reactions={reactions}
+              onSendMessage={(text) => socketRef.current.emit('chat-msg', { roomCode, code: roomCode, name: uname, text })}
+              onTyping={sendTyping}
+              onReact={sendReaction}
             />
           </div>
 

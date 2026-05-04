@@ -1,18 +1,10 @@
 import React from 'react';
 
 export default function Join({
-  setView,
-  uname,
-  setUname,
-  codeInput,
-  setCodeInput,
-  attemptCreateRoom,
-  attemptJoinRoom,
-  modals,
-  setModals,
-  tosChecked,
-  setTosChecked,
-  confirmTosAndExecute
+  setView, uname, setUname, codeInput, setCodeInput,
+  attemptCreateRoom, attemptJoinRoom, modals, setModals,
+  tosChecked, setTosChecked, confirmTosAndExecute,
+  roomPassword, setRoomPassword,
 }) {
   return (
     <>
@@ -21,17 +13,40 @@ export default function Join({
           <button className="btn btn-ghost" style={{padding:'8px 16px', borderRadius:'8px', fontSize:'12px', cursor:'pointer', width:'auto'}} onClick={() => {setView('marketing'); window.scrollTo(0,0);}}>← Back to Home</button>
         </div>
         <div className="logo"><div className="logo-title" style={{marginBottom:'-5px', fontSize:'80px'}}>HUSH<br/>POD</div><div className="logo-sub">Listen together Privately</div></div>
-        
+
         <div className="field" style={{maxWidth:'340px', margin:'0 auto'}}><label>Your name</label><input type="text" value={uname} onChange={e => setUname(e.target.value)} placeholder="Enter your name" maxLength="20" /></div>
-        
+
         <div className="btns" style={{maxWidth:'340px', margin:'0 auto'}}>
-          <button className="btn btn-pink" onClick={attemptCreateRoom}>Create Party Room</button>
+          {/* ── CREATE ROOM ── */}
+          <div style={{padding:'20px', borderRadius:'18px', border:'1px solid var(--border)', background:'var(--s1)', marginBottom:'16px'}}>
+            <h3 style={{fontSize:'11px', fontWeight:'600', letterSpacing:'2px', textTransform:'uppercase', color:'var(--sub)', marginBottom:'12px'}}>Create a Room</h3>
+            <input
+              type="password"
+              value={roomPassword}
+              onChange={e => setRoomPassword(e.target.value)}
+              placeholder="Room password (optional)"
+              maxLength="30"
+              style={{marginBottom:'12px'}}
+            />
+            <button className="btn btn-pink" style={{marginBottom:0}} onClick={attemptCreateRoom}>Create Party Room</button>
+          </div>
+
           <div style={{display:'flex', alignItems:'center', gap:'9px', color:'var(--sub)', fontSize:'12px', margin:'10px 0'}}>
             <span style={{flex:1, height:'1px', background:'var(--border)'}}></span>or join one<span style={{flex:1, height:'1px', background:'var(--border)'}}></span>
           </div>
+
+          {/* ── JOIN ROOM ── */}
           <div style={{padding:'20px', borderRadius:'18px', border:'1px solid var(--border)', background:'var(--s1)'}}>
             <h3 style={{fontSize:'11px', fontWeight:'600', letterSpacing:'2px', textTransform:'uppercase', color:'var(--sub)', marginBottom:'12px'}}>Room Code</h3>
             <input type="text" value={codeInput} onChange={e => setCodeInput(e.target.value.toUpperCase())} placeholder="ABC12" maxLength="5" style={{textAlign:'center', letterSpacing:'6px', fontFamily:'JetBrains Mono', fontWeight:'bold', marginBottom:'12px'}} />
+            <input
+              type="password"
+              value={roomPassword}
+              onChange={e => setRoomPassword(e.target.value)}
+              placeholder="Password (if required)"
+              maxLength="30"
+              style={{marginBottom:'12px'}}
+            />
             <button className="btn btn-cyan" style={{marginBottom:0}} onClick={attemptJoinRoom}>Join Room</button>
           </div>
         </div>

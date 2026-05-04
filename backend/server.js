@@ -134,6 +134,20 @@ app.get('/clocksync', (req, res) => {
   res.json({ t: Date.now() });
 });
 
+// Real-time stats for the Home page hero section
+app.get('/stats', (req, res) => {
+  const roomCount     = Object.keys(rooms).length;
+  const listenerCount = Object.values(rooms).reduce((sum, r) => sum + (r.members?.length || 0), 0);
+  res.json({ rooms: roomCount, listeners: listenerCount });
+});
+
+// Feature: Live stats for Home page
+app.get('/stats', (req, res) => {
+  const activeRooms = Object.keys(rooms).length;
+  const totalListeners = Object.values(rooms).reduce((sum, r) => sum + r.members.length, 0);
+  res.json({ rooms: activeRooms, listeners: totalListeners });
+});
+
 app.get('/stream/:code/:songId', (req, res) => {
   const room = rooms[req.params.code];
   if (!room) return res.status(404).send('Room not found');
@@ -214,68 +228,49 @@ io.on('connection', (socket) => {
   let userName = '';
 
   // ── CREATE ROOM ──
-  socket.on('create-room', ({ name }, cb) => {
+  socket.on('create-room', ({ name, password }, cb) => {
     const code = generateCode();
-    // BUG FIX: room.members is now an ARRAY [], not an object {}
-    // The disconnect handler was calling .findIndex() and .splice() on an object, which
-    // always threw a silent TypeError — meaning members were NEVER actually removed.
     rooms[code] = {
-      hostId: socket.id,
-      hostName: name,
-      queue: [],
-      currentSongId: null,
+      hostId: socket.id, hostName: name,
+      queue: [], currentSongId: null,
       playState: { playing: false, currentTime: 0, ts: Date.now() },
-      members: [],          // ← ARRAY, not {}
-      admins: [socket.id],
-      guestUploads: false,
-      globalVolume: 1.0,
-      orbitActive: false,
+      members: [], admins: [socket.id],
+      guestUploads: false, globalVolume: 1.0, orbitActive: false,
+      password: password ? password.trim() : null,  // Feature: optional room password
     };
-    roomCode = code;
-    userName = name;
+    roomCode = code; userName = name;
     rooms[code].members.push({ id: socket.id, name, isHost: true });
     socket.join(code);
     cb({ code });
-    console.log(`[ROOM] ${code} created by ${name}`);
+    console.log(`[ROOM] ${code} created by ${name}${password ? ' (password protected)' : ''}`);
   });
 
   // ── JOIN ROOM ──
-  socket.on('join-room', ({ code, name, claimHost }, cb) => {
+  socket.on('join-room', ({ code, name, claimHost, password }, cb) => {
     const room = rooms[code];
     if (!room) return cb({ error: 'Room not found.' });
     if (room.members.length >= 15) return cb({ error: 'Room is full!' });
 
-    roomCode = code;
-    userName = name;
+    // Feature: password check (skip for host reclaim)
+    if (room.password && !claimHost) {
+      if (!password || password.trim() !== room.password) {
+        return cb({ error: 'Wrong password. Try again.' });
+      }
+    }
 
-    // BUG FIX: Implement claimHost — previously this parameter was received but NEVER used.
-    // When a host's browser reconnects (new socket ID), they send claimHost:true.
-    // Without this, they'd rejoin as a regular guest with no admin rights, losing all DJ controls.
+    roomCode = code; userName = name;
+
     let isHost = false;
     if (claimHost && hostGrace[code] && hostGrace[code].hostName === name) {
-      // Host reconnected within the grace period — restore their crown!
       clearTimeout(hostGrace[code].timerId);
       delete hostGrace[code];
-
       isHost = true;
       room.hostId = socket.id;
-
-      // Remove admin rights from any previous socket ID of this user
-      // and grant them to the new socket ID
-      room.admins = room.admins.filter(id => {
-        // Keep all admin IDs that are still connected
-        return io.sockets.sockets.has(id);
-      });
+      room.admins = room.admins.filter(id => io.sockets.sockets.has(id));
       if (!room.admins.includes(socket.id)) room.admins.push(socket.id);
-
-      // Update all members' isHost flag
       room.members.forEach(m => { m.isHost = false; });
-
       console.log(`[HOST] ${name} reclaimed crown in room ${code}`);
-      socket.to(code).emit('member-left', {
-        members: room.members,
-        newHostName: null,
-      });
+      socket.to(code).emit('member-left', { members: room.members, newHostName: null });
     }
 
     room.members.push({ id: socket.id, name, isHost });
@@ -284,15 +279,17 @@ io.on('connection', (socket) => {
 
     const currentSong = room.queue.find(s => s.id === room.currentSongId);
     cb({
-      ok: true,
-      isHost,
-      members: room.members,
-      queue: getCleanQueue(room),
+      ok: true, isHost,
+      members: room.members, queue: getCleanQueue(room),
       currentSong: currentSong
         ? { songId: currentSong.id, name: currentSong.name, streamUrl: currentSong.streamUrl }
         : null,
       playState: room.playState,
-      admins: room.admins,
+      admins: room.admins, guestUploads: room.guestUploads,
+      globalVolume: room.globalVolume, orbitActive: room.orbitActive || false,
+      hasPassword: !!room.password,
+    });
+  });
       guestUploads: room.guestUploads,
       globalVolume: room.globalVolume,
       orbitActive: room.orbitActive || false,
@@ -429,6 +426,29 @@ io.on('connection', (socket) => {
   // ── CHAT ──
   socket.on('chat-msg', ({ text }) => {
     if (roomCode) io.to(roomCode).emit('chat-msg', { name: userName, text });
+  });
+
+  // Feature: typing indicator — broadcast to everyone except sender, auto-expires on client
+  socket.on('typing', () => {
+    if (roomCode) socket.to(roomCode).emit('user-typing', { name: userName });
+  });
+
+  // Feature: emoji reactions — broadcast to whole room including sender for instant feedback
+  socket.on('react', ({ emoji }) => {
+    if (roomCode) io.to(roomCode).emit('reaction', { name: userName, emoji, id: Date.now() + Math.random() });
+  });
+
+  // Feature: Typing indicator — broadcast to others, not back to sender
+  socket.on('typing', ({ isTyping }) => {
+    if (roomCode) socket.to(roomCode).emit('typing', { name: userName, isTyping });
+  });
+
+  // Feature: Floating emoji reactions
+  socket.on('reaction', ({ emoji }) => {
+    const ALLOWED = ['🔥','❤️','🎵','👏','😂','🤯','💀','🎉'];
+    if (roomCode && ALLOWED.includes(emoji)) {
+      io.to(roomCode).emit('reaction', { name: userName, emoji });
+    }
   });
 
   // ── DISCONNECT ──

@@ -757,7 +757,7 @@ export default function useHushPodEngine() {
         toast('Server did not respond. Try again.', 'err');
       }, 10000);
 
-      socketRef.current.emit('create-room', { name: uname }, (res) => {
+      socketRef.current.emit('create-room', { name: uname, password: roomPassword.trim() || null }, (res) => {
         clearTimeout(safetyTimer);
         if (!res || res.error) {
           setIsSyncing(false);
@@ -786,7 +786,7 @@ export default function useHushPodEngine() {
         toast('Server did not respond. Try again.', 'err');
       }, 10000);
 
-      socketRef.current.emit('join-room', { code: codeInput, name: uname, claimHost: false }, (res) => {
+      socketRef.current.emit('join-room', { code: codeInput, name: uname, claimHost: false, password: roomPassword.trim() || null }, (res) => {
         clearTimeout(safetyTimer);
         if (!res || res.error) {
           setIsSyncing(false);
@@ -1109,6 +1109,14 @@ export default function useHushPodEngine() {
   };
 
 
+  const sendReaction = (emoji) => {
+    if (socketRef.current) socketRef.current.emit('react', { emoji });
+  };
+
+  const sendTyping = () => {
+    if (socketRef.current && roomCode) socketRef.current.emit('typing');
+  };
+
   // ==========================================
   // EXPORTS
   // ==========================================
@@ -1118,6 +1126,8 @@ export default function useHushPodEngine() {
     queue, setQueue, chat, currentSong, syncState, isPlaying, trackReady,
     guestUploads, setGuestUploads, globalVolume, handleGlobalVolume,
     localVolume, handleLocalVolume,
+    typingUsers, reactions, sendReaction, sendTyping,
+    roomPassword, setRoomPassword,
     orbitActive, loopMode, toggleLoopMode, isShuffle, setIsShuffle,
     draggedIdx, setDraggedIdx, tosChecked, setTosChecked,
     socketRef, actxRef, audioBufferRef, progFillRef, tCurRef,
