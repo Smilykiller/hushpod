@@ -290,11 +290,6 @@ io.on('connection', (socket) => {
       hasPassword: !!room.password,
     });
   });
-      guestUploads: room.guestUploads,
-      globalVolume: room.globalVolume,
-      orbitActive: room.orbitActive || false,
-    });
-  });
 
   // ── PLAYBACK CONTROLS (all gated by admins check) ──
   socket.on('schedule-play', ({ currentTime }) => {
