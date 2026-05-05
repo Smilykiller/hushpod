@@ -5,7 +5,7 @@ export default function DJDesk({
   isPlaying, trackReady, progFillRef, tCurRef, audioBufferRef, fmt, seekClick,
   isShuffle, setIsShuffle, handleSeek, stateRef, actxRef, togglePlay,
   loopMode, toggleLoopMode, queue, draggedIdx, setDraggedIdx, handleDrop, socketRef,
-  playNext, playPrev
+  playNext, playPrev, MarqueeSongName,
 }) {
   const [searchQ, setSearchQ] = React.useState('');
   return (
@@ -34,7 +34,9 @@ export default function DJDesk({
           <div style={{textAlign:'center', padding:'28px 16px'}}><div style={{fontSize:'44px', marginBottom:'10px'}}>🎧</div><h3 style={{fontSize:'17px', fontWeight:'700', marginBottom:'5px'}}>No song yet</h3><p style={{fontSize:'13px', color:'var(--sub)'}}>{(amHost||guestUploads) ? 'Upload a song to start!' : 'Waiting for host to add a song'}</p></div>
         ) : (
           <div>
-            <div style={{fontSize:'20px', fontWeight:'700', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', marginBottom:'3px'}}>{currentSong.name}</div>
+            <div style={{fontSize:'20px', fontWeight:'700', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', marginBottom:'3px'}}>
+                {MarqueeSongName ? <MarqueeSongName name={currentSong.name} /> : currentSong.name}
+              </div>
             <div style={{fontSize:'13px', color:'var(--sub)', fontWeight:'300', marginBottom:'16px'}}>Status: <span style={{color: isPlaying ? 'var(--green)' : 'var(--sub)', fontWeight:'600'}}>{isPlaying ? 'Playing' : 'Paused'}</span></div>
             
             <div style={{width:'100%', height:'70px', margin:'15px 0', background:'transparent', borderRadius:'8px', border:'1px solid var(--border)', overflow:'hidden', position: 'relative'}}>
