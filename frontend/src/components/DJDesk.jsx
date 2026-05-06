@@ -5,11 +5,20 @@ export default function DJDesk({
   isPlaying, trackReady, progFillRef, tCurRef, audioBufferRef, fmt, seekClick,
   isShuffle, setIsShuffle, handleSeek, stateRef, actxRef, togglePlay,
   loopMode, toggleLoopMode, queue, draggedIdx, setDraggedIdx, handleDrop, socketRef,
-  playNext, playPrev, MarqueeSongName,
+  playNext, playPrev, MarqueeSongName, playHistory, isOnline,
 }) {
   const [searchQ, setSearchQ] = React.useState('');
+  const [showHistory, setShowHistory] = React.useState(false);
   return (
     <>
+      {/* Offline banner */}
+      {isOnline === false && (
+        <div style={{ background: 'rgba(247,37,133,0.12)', border: '1px solid rgba(247,37,133,0.4)', borderRadius: '10px', padding: '10px 14px', marginBottom: '10px', fontSize: '13px', color: 'var(--pink)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span>📡</span>
+          <strong>No internet — audio paused. Reconnecting automatically...</strong>
+        </div>
+      )}
+
       <div style={{ background: 'rgba(247,37,133,0.05)', border: '1px solid rgba(247,37,133,0.2)', borderRadius: '8px', padding: '10px 14px', marginBottom: '15px', fontSize: '12px', color: 'var(--sub)', display: 'flex', alignItems: 'center', gap: '10px' }}>
         <span style={{fontSize: '16px'}}>🔊</span>
         <div style={{flex: 1, lineHeight: '1.4'}}>
@@ -148,6 +157,33 @@ export default function DJDesk({
           })()}
         </div>
       </div>
+
+      {/* Play History */}
+      {playHistory && playHistory.length > 0 && (
+        <div className="card">
+          <div className="card-label" style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+            <span>Play History</span>
+            <button onClick={() => setShowHistory(h => !h)} style={{background:'none', border:'none', color:'var(--sub)', cursor:'pointer', fontSize:'12px', padding:0}}>
+              {showHistory ? 'Hide ▲' : 'Show ▼'}
+            </button>
+          </div>
+          {showHistory && (
+            <div style={{display:'flex', flexDirection:'column', gap:'6px', marginTop:'6px'}}>
+              {playHistory.map((s, i) => (
+                <div key={s.id + i} style={{display:'flex', justifyContent:'space-between', alignItems:'center', background:'var(--s2)', padding:'8px 12px', borderRadius:'8px', border:'1px solid var(--border)', opacity: 0.75}}>
+                  <div style={{display:'flex', alignItems:'center', gap:'8px', overflow:'hidden'}}>
+                    <span style={{fontSize:'11px', color:'var(--sub)', flexShrink:0}}>#{i + 1}</span>
+                    <div style={{fontSize:'13px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', color:'var(--sub)'}}>{s.name}</div>
+                  </div>
+                  <span style={{fontSize:'10px', color:'var(--sub)', flexShrink:0, marginLeft:'8px', fontFamily:"'JetBrains Mono',monospace"}}>
+                    {new Date(s.playedAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 }

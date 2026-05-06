@@ -33,6 +33,8 @@ export default function useHushPodEngine() {
   const [members, setMembers]           = useState([]);
   const [queue, setQueue]               = useState([]);
   const [chat, setChat]                 = useState([]);
+  const [playHistory, setPlayHistory]   = useState([]); // songs played this session
+  const [isOnline, setIsOnline]         = useState(navigator.onLine);
   const [currentSong, setCurrentSong]   = useState(null);
 
   const [syncState, setSyncState]       = useState({ state: 'syncing', label: 'Waiting for host...' });
@@ -275,6 +277,7 @@ export default function useHushPodEngine() {
           setGuestUploads(res.guestUploads);
           setGlobalVolume(res.globalVolume);
           if (res.orbitActive !== undefined) setOrbitActive(res.orbitActive);
+          if (res.history) setPlayHistory(res.history);
 
           if (res.currentSong) {
             setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
@@ -370,6 +373,24 @@ export default function useHushPodEngine() {
     navigator.mediaSession.setActionHandler('nexttrack',     () => { if (amHost) playNext(true); });
     navigator.mediaSession.setActionHandler('previoustrack', () => { if (amHost) playPrev(); });
   }, [currentSong, amHost, uname, roomTitle]);
+
+  // 12. ONLINE / OFFLINE DETECTION — shows banner when network drops
+  useEffect(() => {
+    const goOffline = () => {
+      setIsOnline(false);
+      toast('📡 No internet connection — audio may pause', 'err');
+    };
+    const goOnline = () => {
+      setIsOnline(true);
+      toast('✅ Back online — reconnecting...', 'ok');
+    };
+    window.addEventListener('offline', goOffline);
+    window.addEventListener('online',  goOnline);
+    return () => {
+      window.removeEventListener('offline', goOffline);
+      window.removeEventListener('online',  goOnline);
+    };
+  }, []);
 
   // 11. KEYBOARD SHORTCUTS — only active in the room, skipped when typing in an input
   useEffect(() => {
@@ -719,6 +740,8 @@ export default function useHushPodEngine() {
 
     sock.on('queue-updated', ({ queue }) => { setQueue(queue); prefetchQueue(queue); });
 
+    sock.on('history-updated', ({ history }) => { setPlayHistory(history); });
+
     sock.on('chat-msg', ({ name, text }) => {
       setChat(prev => [...prev, { name, text }]);
       if (name !== stateRef.current.uname) toast(`💬 ${name}: ${text}`, 'inf');
@@ -850,6 +873,7 @@ export default function useHushPodEngine() {
         setGuestUploads(res.guestUploads);
         setGlobalVolume(res.globalVolume);
         if (res.orbitActive !== undefined) setOrbitActive(res.orbitActive);
+        if (res.history) setPlayHistory(res.history);
 
         if (res.currentSong) {
           setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
@@ -1174,7 +1198,8 @@ export default function useHushPodEngine() {
   return {
     setView, toastData, modals, setModals, uploadProgress, roomTab, setRoomTab,
     uname, setUname, roomCode, isSyncing, codeInput, setCodeInput, members,
-    queue, setQueue, chat, currentSong, syncState, isPlaying, trackReady,
+    queue, setQueue, chat, playHistory, currentSong, syncState, isPlaying, trackReady,
+    isOnline,
     guestUploads, setGuestUploads, globalVolume, handleGlobalVolume,
     localVolume, handleLocalVolume,
     typingUsers, reactions, sendReaction, sendTyping,

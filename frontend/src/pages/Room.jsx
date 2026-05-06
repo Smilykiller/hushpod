@@ -58,7 +58,7 @@ export default function Room({
   handleGlobalVolume, localVolume, handleLocalVolume, orbitActive, runSonarCalibration,
   syncState, playNext, playPrev, musicalChairActive, toggleMusicalChairs,
   typingUsers, reactions, sendReaction, sendTyping,
-  toggleTheme, theme,
+  toggleTheme, theme, playHistory, isOnline,
 }) {
   const [copied, setCopied] = useState(false);
   const joinLink = `${window.location.origin}/?room=${roomCode}`;
@@ -123,7 +123,7 @@ export default function Room({
                 loopMode={loopMode} toggleLoopMode={toggleLoopMode} queue={queue}
                 setQueue={setQueue} draggedIdx={draggedIdx} setDraggedIdx={setDraggedIdx}
                 handleDrop={handleDrop} socketRef={socketRef} playNext={playNext} playPrev={playPrev}
-                MarqueeSongName={MarqueeSongName}
+                MarqueeSongName={MarqueeSongName} playHistory={playHistory} isOnline={isOnline}
               />
             </ErrorBoundary>
           </div>
