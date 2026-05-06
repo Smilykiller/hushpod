@@ -371,6 +371,57 @@ export default function useHushPodEngine() {
     navigator.mediaSession.setActionHandler('previoustrack', () => { if (amHost) playPrev(); });
   }, [currentSong, amHost, uname, roomTitle]);
 
+  // 11. KEYBOARD SHORTCUTS — only active in the room, skipped when typing in an input
+  useEffect(() => {
+    if (location.pathname !== '/room') return;
+
+    const handler = (e) => {
+      // Don't fire if user is typing in an input/textarea
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      switch (e.code) {
+        case 'Space':
+          e.preventDefault(); // prevent page scroll
+          if (stateRef.current.amHost) togglePlay();
+          break;
+        case 'ArrowRight':
+          if (stateRef.current.amHost && audioBufferRef.current) {
+            e.preventDefault();
+            const cur = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
+            handleSeek(Math.min(cur + 10, audioBufferRef.current.duration - 0.5));
+          }
+          break;
+        case 'ArrowLeft':
+          if (stateRef.current.amHost && audioBufferRef.current) {
+            e.preventDefault();
+            const cur = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
+            handleSeek(Math.max(cur - 10, 0));
+          }
+          break;
+        case 'KeyN':
+          if (stateRef.current.amHost) playNext(true);
+          break;
+        case 'KeyP':
+          if (stateRef.current.amHost) playPrev();
+          break;
+        case 'KeyM':
+          // Mute/unmute local volume
+          if (gainNodeRef.current) {
+            const isMuted = gainNodeRef.current.gain.value === 0;
+            gainNodeRef.current.gain.value = isMuted ? stateRef.current.globalVolume : 0;
+            toast(isMuted ? '🔊 Unmuted' : '🔇 Muted', 'inf');
+          }
+          break;
+        default: break;
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, amHost]);
+
 
   // ==========================================
   // CORE AUDIO FUNCTIONS

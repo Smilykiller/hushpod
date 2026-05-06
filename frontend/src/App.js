@@ -1,17 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
 import './App.css';
 
 import useHushPodEngine from './hooks/useHushPodEngine';
-import Home from './pages/Home';
-import Join from './pages/Join';
-import Room from './pages/Room';
 import NeonLoader from './components/NeonLoader';
 
-// POLISH: Toast icon mapping based on type
+// PERF: Lazy-load heavy pages — they are only downloaded when actually visited.
+// Home (marketing) and Room (audio engine) are large. This cuts initial JS parse time.
+const Home = lazy(() => import('./pages/Home'));
+const Join = lazy(() => import('./pages/Join'));
+const Room = lazy(() => import('./pages/Room'));
+
+// Toast icon mapping
 const TOAST_ICONS = { ok: '✅', err: '❌', inf: 'ℹ️' };
 
-// POLISH: Wrap each route in a transition div
+// Page transition wrapper
 function AnimatedPage({ children }) {
   const location = useLocation();
   return (
@@ -25,7 +28,7 @@ function HushPodApp() {
   const engine   = useHushPodEngine();
   const location = useLocation();
 
-  // POLISH: Theme toggle — persisted to localStorage
+  // Theme toggle — persisted to localStorage
   const [theme, setTheme] = useState(() => localStorage.getItem('hushpod_theme') || 'dark');
 
   useEffect(() => {
@@ -47,7 +50,7 @@ function HushPodApp() {
       r: Math.random() * 1.5 + .5,
       vx: (Math.random() - .5) * .2, vy: (Math.random() - .5) * .2,
       col: ['#f72585', '#4cc9f0', '#06d6a0'][Math.floor(Math.random() * 3)],
-      a: Math.random() * .4 + .1
+      a: Math.random() * .4 + .1,
     }));
     function resize() { W = c.width = window.innerWidth; H = c.height = window.innerHeight; }
     resize(); window.addEventListener('resize', resize);
@@ -70,7 +73,7 @@ function HushPodApp() {
     <>
       <canvas id="bgc"></canvas>
 
-      {/* POLISH: Redesigned toast — slides from top, has icon, backdrop blur */}
+      {/* Redesigned toast — slides from top, has icon, backdrop blur */}
       <div className={`toast ${engine.toastData.visible ? 'on' : ''} ${engine.toastData.type}`}>
         <span className="toast-icon">{TOAST_ICONS[engine.toastData.type] || 'ℹ️'}</span>
         {engine.toastData.msg}
@@ -79,17 +82,20 @@ function HushPodApp() {
       {engine.isSyncing && <NeonLoader />}
 
       {!engine.isSyncing && (
-        <Routes>
-          <Route path="/" element={
-            <AnimatedPage><Home setView={engine.setView} /></AnimatedPage>
-          }/>
-          <Route path="/join" element={
-            <AnimatedPage><Join {...engine} /></AnimatedPage>
-          }/>
-          <Route path="/room" element={
-            <AnimatedPage><Room {...engine} toggleTheme={toggleTheme} theme={theme} /></AnimatedPage>
-          }/>
-        </Routes>
+        // PERF: Suspense fallback shows NeonLoader while the lazy chunk downloads
+        <Suspense fallback={<NeonLoader text="Loading..." />}>
+          <Routes>
+            <Route path="/" element={
+              <AnimatedPage><Home setView={engine.setView} /></AnimatedPage>
+            }/>
+            <Route path="/join" element={
+              <AnimatedPage><Join {...engine} /></AnimatedPage>
+            }/>
+            <Route path="/room" element={
+              <AnimatedPage><Room {...engine} toggleTheme={toggleTheme} theme={theme} /></AnimatedPage>
+            }/>
+          </Routes>
+        </Suspense>
       )}
     </>
   );

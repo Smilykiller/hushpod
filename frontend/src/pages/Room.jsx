@@ -6,6 +6,7 @@ import ListenerList from '../components/ListenerList';
 import ChatBox from '../components/ChatBox';
 import RoomSettings from '../components/RoomSettings';
 import LabsTab from '../components/LabsTab';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 // POLISH: Marquee component — scrolls only when text overflows
 function MarqueeSongName({ name }) {
@@ -111,64 +112,74 @@ export default function Room({
 
           {/* ── TAB CONTENT ── */}
           <div style={{ display: roomTab === 'dj' ? 'block' : 'none' }}>
-            <DJDesk
-              setRoomTab={setRoomTab} amHost={amHost} guestUploads={guestUploads}
-              currentSong={currentSong} uploadSongs={uploadSongs} uploadProgress={uploadProgress}
-              isPlaying={isPlaying} trackReady={trackReady} progFillRef={progFillRef}
-              tCurRef={tCurRef} audioBufferRef={audioBufferRef} fmt={fmt} seekClick={seekClick}
-              isShuffle={isShuffle} setIsShuffle={setIsShuffle} handleSeek={handleSeek}
-              stateRef={stateRef} actxRef={actxRef} togglePlay={togglePlay}
-              loopMode={loopMode} toggleLoopMode={toggleLoopMode} queue={queue}
-              setQueue={setQueue} draggedIdx={draggedIdx} setDraggedIdx={setDraggedIdx}
-              handleDrop={handleDrop} socketRef={socketRef} playNext={playNext} playPrev={playPrev}
-              MarqueeSongName={MarqueeSongName}
-            />
+            <ErrorBoundary name="DJ Desk">
+              <DJDesk
+                setRoomTab={setRoomTab} amHost={amHost} guestUploads={guestUploads}
+                currentSong={currentSong} uploadSongs={uploadSongs} uploadProgress={uploadProgress}
+                isPlaying={isPlaying} trackReady={trackReady} progFillRef={progFillRef}
+                tCurRef={tCurRef} audioBufferRef={audioBufferRef} fmt={fmt} seekClick={seekClick}
+                isShuffle={isShuffle} setIsShuffle={setIsShuffle} handleSeek={handleSeek}
+                stateRef={stateRef} actxRef={actxRef} togglePlay={togglePlay}
+                loopMode={loopMode} toggleLoopMode={toggleLoopMode} queue={queue}
+                setQueue={setQueue} draggedIdx={draggedIdx} setDraggedIdx={setDraggedIdx}
+                handleDrop={handleDrop} socketRef={socketRef} playNext={playNext} playPrev={playPrev}
+                MarqueeSongName={MarqueeSongName}
+              />
+            </ErrorBoundary>
           </div>
 
           <div style={{ display: roomTab === 'members' ? 'block' : 'none' }}>
-            <ListenerList
-              members={members}
-              currentUserId={socketRef.current?.id}
-              amHost={amHost}
-              admins={stateRef.current?.admins || []}
-              onMakeAdmin={(id) => socketRef.current.emit('make-admin', { targetId: id })}
-              onRemoveAdmin={(id) => socketRef.current.emit('remove-admin', { targetId: id })}
-              onTransferHost={(id) => socketRef.current.emit('transfer-host', { targetId: id })}
-            />
+            <ErrorBoundary name="Listener List">
+              <ListenerList
+                members={members}
+                currentUserId={socketRef.current?.id}
+                amHost={amHost}
+                admins={stateRef.current?.admins || []}
+                onMakeAdmin={(id) => socketRef.current.emit('make-admin', { targetId: id })}
+                onRemoveAdmin={(id) => socketRef.current.emit('remove-admin', { targetId: id })}
+                onTransferHost={(id) => socketRef.current.emit('transfer-host', { targetId: id })}
+              />
+            </ErrorBoundary>
           </div>
 
           <div style={{ display: roomTab === 'chat' ? 'block' : 'none' }}>
-            <ChatBox
-              chat={chat}
-              uname={uname}
-              amHost={amHost}
-              typingUsers={typingUsers}
-              reactions={reactions}
-              onSendMessage={(text) => socketRef.current.emit('chat-msg', { roomCode, code: roomCode, name: uname, text })}
-              onTyping={sendTyping}
-              onReact={sendReaction}
-            />
+            <ErrorBoundary name="Chat">
+              <ChatBox
+                chat={chat}
+                uname={uname}
+                amHost={amHost}
+                typingUsers={typingUsers}
+                reactions={reactions}
+                onSendMessage={(text) => socketRef.current.emit('chat-msg', { roomCode, code: roomCode, name: uname, text })}
+                onTyping={sendTyping}
+                onReact={sendReaction}
+              />
+            </ErrorBoundary>
           </div>
 
           <div style={{ display: roomTab === 'settings' ? 'block' : 'none' }}>
-            <RoomSettings
-              amHost={amHost}
-              guestUploads={guestUploads}
-              setGuestUploads={setGuestUploads}
-              globalVolume={globalVolume}
-              handleGlobalVolume={handleGlobalVolume}
-              localVolume={localVolume}
-              handleLocalVolume={handleLocalVolume}
-              socketRef={socketRef}
-            />
+            <ErrorBoundary name="Settings">
+              <RoomSettings
+                amHost={amHost}
+                guestUploads={guestUploads}
+                setGuestUploads={setGuestUploads}
+                globalVolume={globalVolume}
+                handleGlobalVolume={handleGlobalVolume}
+                localVolume={localVolume}
+                handleLocalVolume={handleLocalVolume}
+                socketRef={socketRef}
+              />
+            </ErrorBoundary>
           </div>
 
           <div style={{ display: roomTab === 'orbit' ? 'block' : 'none' }}>
-            <LabsTab engine={{
-              amHost, queue, currentSong, isPlaying, musicalChairActive,
-              toggleMusicalChairs, playNext, playPrev, togglePlay,
-              stateRef, runSonarCalibration, orbitActive, members, socketRef,
-            }} />
+            <ErrorBoundary name="Labs">
+              <LabsTab engine={{
+                amHost, queue, currentSong, isPlaying, musicalChairActive,
+                toggleMusicalChairs, playNext, playPrev, togglePlay,
+                stateRef, runSonarCalibration, orbitActive, members, socketRef,
+              }} />
+            </ErrorBoundary>
           </div>
 
         </div>
