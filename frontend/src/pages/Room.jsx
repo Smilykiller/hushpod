@@ -7,6 +7,7 @@ import ChatBox from '../components/ChatBox';
 import RoomSettings from '../components/RoomSettings';
 import LabsTab from '../components/LabsTab';
 import ErrorBoundary from '../components/ErrorBoundary';
+import BluetoothStatus from '../components/BluetoothStatus';
 
 // POLISH: Marquee component — scrolls only when text overflows
 function MarqueeSongName({ name }) {
@@ -58,7 +59,7 @@ export default function Room({
   handleGlobalVolume, localVolume, handleLocalVolume, orbitActive, runSonarCalibration,
   syncState, playNext, playPrev, musicalChairActive, toggleMusicalChairs,
   typingUsers, reactions, sendReaction, sendTyping,
-  toggleTheme, theme, playHistory, isOnline,
+  toggleTheme, theme, playHistory, isOnline, hasPassword, btStatus,
 }) {
   const [copied, setCopied] = useState(false);
   const joinLink = `${window.location.origin}/?room=${roomCode}`;
@@ -76,8 +77,20 @@ export default function Room({
         {/* ── HEADER ── */}
         <div className="rhead">
           <div className="rhead-left">
-            <div className="rname">{roomTitle}</div>
-            <div className="rcode">Code: <strong style={{ color: 'var(--pink)', letterSpacing: '2px' }}>{roomCode}</strong></div>
+            <div className="rname">
+              {hasPassword && <span title="Password protected" style={{ fontSize: '14px', marginRight: '6px' }}>🔐</span>}
+              {roomTitle}
+            </div>
+            {/* Tap room code to copy it */}
+            <div
+              className="rcode"
+              onClick={() => { navigator.clipboard.writeText(roomCode); }}
+              title="Tap to copy room code"
+              style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}
+            >
+              Code: <strong style={{ color: 'var(--pink)', letterSpacing: '2px' }}>{roomCode}</strong>
+              <span style={{ fontSize: '11px', color: 'var(--sub)' }}>⎘</span>
+            </div>
           </div>
           <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
             {/* POLISH: theme toggle */}
@@ -228,6 +241,9 @@ export default function Room({
           </div>
         </div>
       )}
+      {/* ── BLUETOOTH STATUS BADGE (all users) ── */}
+      <BluetoothStatus btStatus={btStatus} onRunSonar={runSonarCalibration} />
+
     </>
   );
 }

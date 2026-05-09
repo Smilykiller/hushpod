@@ -57,7 +57,17 @@ export default function useHushPodEngine() {
   const [typingUsers, setTypingUsers]   = useState([]); // ['Alice', 'Bob']
   // Feature: Room password
   const [roomPassword, setRoomPassword] = useState('');
-  const [joinPassword, setJoinPassword] = useState('');
+  const [hasPassword, setHasPassword]   = useState(false);
+
+  // Bluetooth auto-detection state
+  const [btStatus, setBtStatus] = useState({
+    connected:   false,   // is a BT device currently active
+    deviceName:  '',      // e.g. "AirPods Pro"
+    latencyMs:   0,       // calculated latency in ms
+    type:        'wired', // 'wired' | 'bluetooth' | 'detecting'
+    synced:      false,   // has latency been applied
+  });
+  const prevDevicesRef = useRef([]); // snapshot of last known device list
 
   const typingTimers = useRef({});
 
@@ -176,25 +186,186 @@ export default function useHushPodEngine() {
     };
   }, []);
 
-  // 4. DEVICE HARDWARE CHANGE — reset latency calibration when headphones/speakers swap
+  // 4. BLUETOOTH AUTO-DETECTION ENGINE
+  // Fires on every hardware change (plug in headphones, connect BT, disconnect, etc.)
+  // Works independently on EVERY device — host and guests each correct their own latency.
+  // Browser requires a one-time mic permission to read device labels (privacy API restriction).
   useEffect(() => {
-    const handleDeviceChange = () => {
-      if (stateRef.current.isCalibrated) {
-        toast('Audio hardware changed. Resetting sync...', 'inf');
-        stateRef.current.outLat = 0.050;
-        stateRef.current.isCalibrated = false;
-        if (stateRef.current.localPlayState && audioBufferRef.current) {
-          const currentPos = stateRef.current.songOffset + (actxRef.current.currentTime - stateRef.current.nodeStartTime);
-          applyPlayState(true, currentPos, sNow(), false);
-        }
+
+    // Known BT signature patterns in device label strings
+    const BT_PATTERNS = [
+      'bluetooth','airpod','buds','bose','sony wh','sony wf',
+      'jabra','beats','jbl','anker soundcore','sennheiser','plantronics',
+      'poly','samsung galaxy buds','pixel buds','nothing ear',
+    ];
+    const isBluetooth = (label) =>
+      BT_PATTERNS.some(p => label.toLowerCase().includes(p));
+
+    // Latency profile table — BT codec latency estimates in seconds
+    // Real measured latency = OS baseLatency + codec delay + air transmission
+    const BT_PROFILES = [
+      { pattern: 'airpod',        lat: 0.160 }, // Apple AAC ~160ms
+      { pattern: 'sony wh',       lat: 0.220 }, // Sony LDAC ~220ms
+      { pattern: 'sony wf',       lat: 0.200 },
+      { pattern: 'bose',          lat: 0.200 },
+      { pattern: 'jabra',         lat: 0.180 },
+      { pattern: 'beats',         lat: 0.170 },
+      { pattern: 'buds',          lat: 0.180 }, // Samsung / Pixel buds
+      { pattern: 'jbl',           lat: 0.220 },
+      { pattern: 'sennheiser',    lat: 0.200 },
+      { pattern: 'anker',         lat: 0.240 },
+      { pattern: 'nothing',       lat: 0.170 },
+      { pattern: 'bluetooth',     lat: 0.200 }, // generic BT fallback
+    ];
+
+    const getProfileLatency = (label) => {
+      const l = label.toLowerCase();
+      for (const p of BT_PROFILES) {
+        if (l.includes(p.pattern)) return p.lat;
+      }
+      return 0.200; // safe BT default
+    };
+
+    const applyLatency = (latSec, deviceName, type) => {
+      // Add AudioContext hardware buffer on top of codec delay
+      const hwLat = actxRef.current
+        ? (actxRef.current.outputLatency || actxRef.current.baseLatency || 0.04)
+        : 0.04;
+      const total = Math.max(0.020, Math.min(0.600, latSec + hwLat));
+
+      stateRef.current.outLat       = total;
+      stateRef.current.isCalibrated = true;
+
+      setBtStatus({
+        connected:  type === 'bluetooth',
+        deviceName,
+        latencyMs:  Math.round(total * 1000),
+        type,
+        synced:     true,
+      });
+
+      toast(
+        type === 'bluetooth'
+          ? `🎧 ${deviceName} — ${Math.round(total * 1000)}ms sync applied`
+          : `🔌 ${deviceName || 'Wired device'} — ${Math.round(total * 1000)}ms sync applied`,
+        'ok'
+      );
+
+      // If audio is currently playing, re-lock sync immediately with new latency
+      if (stateRef.current.localPlayState && audioBufferRef.current) {
+        const cur = stateRef.current.songOffset +
+          (actxRef.current.currentTime - stateRef.current.nodeStartTime);
+        applyPlayState(true, cur, sNow(), false);
       }
     };
+
+    const detectAndApply = async () => {
+      if (!actxRef.current) return; // AudioContext not ready yet — skip silent
+
+      setBtStatus(s => ({ ...s, type: 'detecting' }));
+
+      try {
+        // Browser hides device labels without mic permission — request briefly
+        let stream = null;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch {
+          // No mic permission — use OS latency only (still better than nothing)
+        }
+
+        const devices  = await navigator.mediaDevices.enumerateDevices();
+        if (stream) stream.getTracks().forEach(t => t.stop()); // release mic immediately
+
+        const outputs  = devices.filter(d => d.kind === 'audiooutput');
+        const current  = prevDevicesRef.current;
+
+        // Find newly connected device (present now, absent before)
+        const newDevices = outputs.filter(
+          d => !current.some(p => p.deviceId === d.deviceId)
+        );
+        // Find removed device (present before, absent now)
+        const removedDevices = current.filter(
+          d => !outputs.some(p => p.deviceId === d.deviceId)
+        );
+
+        // Update snapshot
+        prevDevicesRef.current = outputs;
+
+        // ── DEVICE DISCONNECTED ──
+        if (removedDevices.length > 0) {
+          const removed = removedDevices[0];
+          const wasbt   = isBluetooth(removed.label || '');
+
+          if (wasbt) {
+            // BT disconnected mid-session — revert to wired defaults instantly
+            const hwLat = actxRef.current.outputLatency || actxRef.current.baseLatency || 0.040;
+            stateRef.current.outLat       = hwLat;
+            stateRef.current.isCalibrated = false;
+
+            setBtStatus({
+              connected:  false,
+              deviceName: '',
+              latencyMs:  Math.round(hwLat * 1000),
+              type:       'wired',
+              synced:     true,
+            });
+
+            toast('🔌 Bluetooth disconnected — reverted to wired sync', 'inf');
+
+            // Re-lock sync to wired latency
+            if (stateRef.current.localPlayState && audioBufferRef.current) {
+              const cur = stateRef.current.songOffset +
+                (actxRef.current.currentTime - stateRef.current.nodeStartTime);
+              applyPlayState(true, cur, sNow(), false);
+            }
+          }
+          return;
+        }
+
+        // ── DEVICE CONNECTED ──
+        const target = newDevices.length > 0
+          ? newDevices[0]
+          : outputs.find(d => d.deviceId === 'default') || outputs[0];
+
+        if (!target) {
+          setBtStatus(s => ({ ...s, type: 'wired', synced: false }));
+          return;
+        }
+
+        const label = target.label || '';
+        if (isBluetooth(label)) {
+          const profileLat = getProfileLatency(label);
+          const cleanName  = label.replace(/\s*\(.*?\)\s*/g, '').trim() || 'Bluetooth Device';
+          applyLatency(profileLat, cleanName, 'bluetooth');
+        } else {
+          // Wired / internal speaker — use raw AudioContext latency
+          const hwLat  = actxRef.current.outputLatency || actxRef.current.baseLatency || 0.040;
+          const clean  = label.replace(/\s*\(.*?\)\s*/g, '').trim() || 'Built-in Output';
+          applyLatency(hwLat, clean, 'wired');
+        }
+
+      } catch (err) {
+        console.warn('[BT Detect]', err);
+        setBtStatus(s => ({ ...s, type: 'wired', synced: false }));
+      }
+    };
+
+    // Run once on mount to detect whatever is already connected
+    if (navigator.mediaDevices?.enumerateDevices) {
+      navigator.mediaDevices.enumerateDevices()
+        .then(devices => {
+          prevDevicesRef.current = devices.filter(d => d.kind === 'audiooutput');
+        })
+        .then(() => detectAndApply())
+        .catch(() => {});
+    }
+
     if (navigator.mediaDevices?.addEventListener) {
-      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+      navigator.mediaDevices.addEventListener('devicechange', detectAndApply);
     }
     return () => {
       if (navigator.mediaDevices?.removeEventListener) {
-        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+        navigator.mediaDevices.removeEventListener('devicechange', detectAndApply);
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -278,6 +449,7 @@ export default function useHushPodEngine() {
           setGlobalVolume(res.globalVolume);
           if (res.orbitActive !== undefined) setOrbitActive(res.orbitActive);
           if (res.history) setPlayHistory(res.history);
+          if (res.hasPassword !== undefined) setHasPassword(res.hasPassword);
 
           if (res.currentSong) {
             setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
@@ -839,6 +1011,7 @@ export default function useHushPodEngine() {
         }
         setRoomCode(res.code);
         setMembers([{ id: socketRef.current.id, name: uname, isHost: true }]);
+        setHasPassword(!!(roomPassword.trim()));
         sessionStorage.setItem('hushpod_session', JSON.stringify({ code: res.code, name: uname, isHost: true }));
         setIsSyncing(false);
         setRoomTab('dj');
@@ -874,6 +1047,7 @@ export default function useHushPodEngine() {
         setGlobalVolume(res.globalVolume);
         if (res.orbitActive !== undefined) setOrbitActive(res.orbitActive);
         if (res.history) setPlayHistory(res.history);
+          if (res.hasPassword !== undefined) setHasPassword(res.hasPassword);
 
         if (res.currentSong) {
           setCurrentSong({ id: res.currentSong.songId, name: res.currentSong.name });
@@ -1203,7 +1377,7 @@ export default function useHushPodEngine() {
     guestUploads, setGuestUploads, globalVolume, handleGlobalVolume,
     localVolume, handleLocalVolume,
     typingUsers, reactions, sendReaction, sendTyping,
-    roomPassword, setRoomPassword,
+    roomPassword, setRoomPassword, hasPassword, btStatus,
     orbitActive, loopMode, toggleLoopMode, isShuffle, setIsShuffle,
     draggedIdx, setDraggedIdx, tosChecked, setTosChecked,
     socketRef, actxRef, audioBufferRef, progFillRef, tCurRef,

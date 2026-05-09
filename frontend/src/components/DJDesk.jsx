@@ -69,8 +69,17 @@ export default function DJDesk({
               <div style={{display:'flex', justifyContent:'space-between', fontSize:'11px', color:'var(--sub)', fontFamily:"'JetBrains Mono',monospace"}}><span ref={tCurRef}>0:00</span><span>{audioBufferRef.current ? fmt(audioBufferRef.current.duration) : '0:00'}</span></div>
             </div>
             
-            {/* ALL 7 BUTTONS (Shuffle, Prev, -10s, Play, +10s, Next, Repeat) */}
             {amHost && (
+              <div style={{display:'flex', flexWrap:'wrap', gap:'6px', marginTop:'14px', padding:'10px 12px', background:'var(--s2)', borderRadius:'10px', border:'1px solid var(--border)'}}>
+                <span style={{fontSize:'10px', color:'var(--sub)', width:'100%', marginBottom:'2px', fontWeight:'700', letterSpacing:'1px', textTransform:'uppercase'}}>Keyboard Shortcuts</span>
+                {[['Space','Play / Pause'],['←  →','Seek ±10s'],['N','Next Song'],['P','Prev Song'],['M','Mute']].map(([k, v]) => (
+                  <div key={k} style={{display:'flex', alignItems:'center', gap:'5px', fontSize:'11px', color:'var(--sub)'}}>
+                    <kbd style={{background:'var(--s3)', border:'1px solid var(--border)', borderRadius:'4px', padding:'2px 6px', fontFamily:"'JetBrains Mono',monospace", fontSize:'10px', color:'var(--text)'}}>{k}</kbd>
+                    <span>{v}</span>
+                  </div>
+                ))}
+              </div>
+            )}
               <div style={{display:'flex', justifyContent:'center', alignItems:'center', gap:'8px', marginTop:'10px'}}>
                 <button className="btn-ghost" style={{color: isShuffle ? 'var(--pink)' : 'var(--sub)', borderColor: isShuffle ? 'var(--pink)' : 'var(--border)', width:'36px', height:'36px', borderRadius:'8px', padding:0, fontSize:'14px', display:'flex', alignItems:'center', justifyContent:'center', margin:0}} onClick={() => setIsShuffle(!isShuffle)}>🔀</button>
                 
@@ -89,7 +98,7 @@ export default function DJDesk({
                   {loopMode === 'song' ? '🔂' : '🔁'}
                 </button>
               </div>
-            )}
+            
           </div>
         )}
       </div>

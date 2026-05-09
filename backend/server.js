@@ -141,31 +141,35 @@ app.get('/stats', (req, res) => {
   res.json({ rooms: roomCount, listeners: listenerCount });
 });
 
-// Feature: Live stats for Home page
-app.get('/stats', (req, res) => {
-  const activeRooms = Object.keys(rooms).length;
-  const totalListeners = Object.values(rooms).reduce((sum, r) => sum + r.members.length, 0);
-  res.json({ rooms: activeRooms, listeners: totalListeners });
-});
-
 app.get('/stream/:code/:songId', (req, res) => {
   const room = rooms[req.params.code];
   if (!room) return res.status(404).send('Room not found');
   const song = room.queue.find(s => s.id === req.params.songId);
   if (!song || !fs.existsSync(song.filePath)) return res.status(404).send('Not found');
 
-  const stat = fs.statSync(song.filePath);
+  const stat  = fs.statSync(song.filePath);
   const total = stat.size;
   const range = req.headers.range;
-  res.setHeader('Content-Type', song.type || 'audio/mpeg');
+
+  // PERF: Song IDs are unique per session. Cache aggressively for 1 hour.
+  // This means guests who re-join or change tabs don't re-download the whole file.
+  const etag = `"${song.id}-${total}"`;
+  res.setHeader('Content-Type',  song.type || 'audio/mpeg');
   res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'private, max-age=3600, immutable');
+  res.setHeader('ETag', etag);
+
+  // Handle conditional request (browser already has it cached)
+  if (req.headers['if-none-match'] === etag) {
+    return res.status(304).end();
+  }
 
   if (range) {
     const [s, e] = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(s, 10);
-    const end = e ? parseInt(e, 10) : total - 1;
+    const start  = parseInt(s, 10);
+    const end    = e ? parseInt(e, 10) : total - 1;
     res.writeHead(206, {
-      'Content-Range': `bytes ${start}-${end}/${total}`,
+      'Content-Range':  `bytes ${start}-${end}/${total}`,
       'Content-Length': end - start + 1,
     });
     fs.createReadStream(song.filePath, { start, end }).pipe(res);
@@ -233,10 +237,11 @@ io.on('connection', (socket) => {
     rooms[code] = {
       hostId: socket.id, hostName: name,
       queue: [], currentSongId: null,
+      playedHistory: [],  // tracks finished songs — sent to clients for history display
       playState: { playing: false, currentTime: 0, ts: Date.now() },
       members: [], admins: [socket.id],
       guestUploads: false, globalVolume: 1.0, orbitActive: false,
-      password: password ? password.trim() : null,  // Feature: optional room password
+      password: password ? password.trim() : null,
     };
     roomCode = code; userName = name;
     rooms[code].members.push({ id: socket.id, name, isHost: true });
@@ -288,6 +293,7 @@ io.on('connection', (socket) => {
       admins: room.admins, guestUploads: room.guestUploads,
       globalVolume: room.globalVolume, orbitActive: room.orbitActive || false,
       hasPassword: !!room.password,
+      history: room.playedHistory || [],
     });
   });
 
@@ -320,6 +326,17 @@ io.on('connection', (socket) => {
     if (!room || !room.admins.includes(socket.id)) return;
     const song = room.queue.find(s => s.id === songId);
     if (!song) return;
+
+    // Move previous song to history before switching
+    if (room.currentSongId && room.currentSongId !== songId) {
+      const prev = room.queue.find(s => s.id === room.currentSongId);
+      if (prev) {
+        room.playedHistory.unshift({ id: prev.id, name: prev.name, playedAt: Date.now() });
+        if (room.playedHistory.length > 20) room.playedHistory.pop(); // cap at 20
+        io.to(roomCode).emit('history-updated', { history: room.playedHistory });
+      }
+    }
+
     room.currentSongId = songId;
     if (autoPlay) {
       const targetTs = Date.now() + 1500;
@@ -336,6 +353,15 @@ io.on('connection', (socket) => {
   socket.on('song-ended', () => {
     const room = rooms[roomCode];
     if (!room || !room.admins.includes(socket.id)) return;
+    // Move current song to history
+    if (room.currentSongId) {
+      const prev = room.queue.find(s => s.id === room.currentSongId);
+      if (prev) {
+        room.playedHistory.unshift({ id: prev.id, name: prev.name, playedAt: Date.now() });
+        if (room.playedHistory.length > 20) room.playedHistory.pop();
+        io.to(roomCode).emit('history-updated', { history: room.playedHistory });
+      }
+    }
     room.currentSongId = null;
     room.playState = { playing: false, currentTime: 0, ts: Date.now() };
   });

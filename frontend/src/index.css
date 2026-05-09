@@ -293,7 +293,7 @@ body.light {
   --s3:     #ccccdf;
   --border: rgba(0,0,0,0.09);
   --text:   #111122;
-  --sub:    #5555770;
+  --sub:    #555577;
   color-scheme: light;
 }
 body.light .hero-title .line2 { -webkit-text-stroke: 1px rgba(0,0,0,0.12); }
