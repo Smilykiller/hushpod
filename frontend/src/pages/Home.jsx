@@ -1,892 +1,690 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 
-/* ─────────────────────────────────────────────
-   HOOK: tilt effect on any card
-───────────────────────────────────────────── */
-function useTilt(strength = 12) {
+/* ══════════════════════════════════════════════════════════════
+   HUSHPOD — ULTRA PRO MAX HOME PAGE
+   Aesthetic: Dark Rave × Brutalist Neon × Spatial 3D
+   Every section has its own 3D moment. Scroll = cinema.
+══════════════════════════════════════════════════════════════ */
+
+/* ── Persistent IntersectionObserver map (survives StrictMode) ── */
+const revealMap = new WeakMap();
+
+function Reveal({ children, delay=0, y=60, x=0, scale=false, rotate=false, style={} }) {
   const ref = useRef(null);
-  const onMove = useCallback((e) => {
-    const el = ref.current;
-    if (!el) return;
-    const r  = el.getBoundingClientRect();
-    const cx = r.left + r.width  / 2;
-    const cy = r.top  + r.height / 2;
-    const dx = (e.clientX - cx) / (r.width  / 2);
-    const dy = (e.clientY - cy) / (r.height / 2);
-    el.style.transform = `perspective(600px) rotateY(${dx * strength}deg) rotateX(${-dy * strength}deg) translateZ(10px)`;
-    el.style.transition = 'transform 0.1s ease';
-  }, [strength]);
-  const onLeave = useCallback(() => {
-    if (ref.current) {
-      ref.current.style.transform = 'perspective(600px) rotateY(0) rotateX(0) translateZ(0)';
-      ref.current.style.transition = 'transform 0.5s ease';
-    }
+  const [vis, setVis] = useState(false);
+  useEffect(() => {
+    const el = ref.current; if (!el || revealMap.has(el)) return;
+    const obs = new IntersectionObserver(([e]) => {
+      if (e.isIntersecting) { setVis(true); obs.unobserve(el); revealMap.delete(el); }
+    }, { threshold: 0.01, rootMargin: '0px 0px -50px 0px' });
+    obs.observe(el); revealMap.set(el, obs);
+    return () => { obs.unobserve(el); revealMap.delete(el); };
   }, []);
-  return { ref, onMouseMove: onMove, onMouseLeave: onLeave };
+  return (
+    <div ref={ref} style={{
+      opacity: vis ? 1 : 0,
+      transform: vis ? 'none' : [
+        `translateY(${y}px)`,
+        x ? `translateX(${x}px)` : '',
+        scale ? 'scale(0.88)' : '',
+        rotate ? 'rotate(-4deg)' : '',
+      ].filter(Boolean).join(' '),
+      transition: `opacity .8s ease ${delay}s, transform .9s cubic-bezier(0.16,1,0.3,1) ${delay}s`,
+      willChange: 'transform,opacity', ...style,
+    }}>{children}</div>
+  );
 }
 
-/* ─────────────────────────────────────────────
-   COMPONENT: Tilt Card
-───────────────────────────────────────────── */
-function TiltCard({ children, style, className, strength }) {
-  const tilt = useTilt(strength || 10);
+/* ── Tilt ── */
+function Tilt({ children, s=10, style={}, className='' }) {
+  const r = useRef(null);
+  const move = useCallback(e => {
+    const el = r.current; if (!el) return;
+    const b=el.getBoundingClientRect();
+    const dx=(e.clientX-(b.left+b.width/2))/(b.width/2);
+    const dy=(e.clientY-(b.top+b.height/2))/(b.height/2);
+    el.style.transform=`perspective(800px) rotateY(${dx*s}deg) rotateX(${-dy*s}deg) translateZ(16px)`;
+    el.style.transition='transform .08s ease';
+  },[s]);
+  const leave = useCallback(()=>{
+    if(r.current){ r.current.style.transform='perspective(800px) rotateY(0) rotateX(0) translateZ(0)'; r.current.style.transition='transform .6s cubic-bezier(.22,1,.36,1)'; }
+  },[]);
+  return <div ref={r} onMouseMove={move} onMouseLeave={leave} style={{transformStyle:'preserve-3d',willChange:'transform',...style}} className={className}>{children}</div>;
+}
+
+/* ── Animated Counter ── */
+function Count({ value, unit='', color='#f72585', size='clamp(40px,6vw,72px)', delay=0 }) {
+  const [n, setN] = useState(0);
+  const [vis, setVis] = useState(false);
+  const ref = useRef(null);
+  useEffect(()=>{
+    const obs=new IntersectionObserver(([e])=>{ if(e.isIntersecting){setVis(true);obs.disconnect();} },{threshold:.01,rootMargin:'0px 0px -30px 0px'});
+    obs.observe(ref.current); return()=>obs.disconnect();
+  },[]);
+  useEffect(()=>{
+    if(!vis||isNaN(parseInt(value)))return;
+    const t=parseInt(value),steps=60;let s=0;
+    const id=setInterval(()=>{ s++; setN(Math.round(t*(s/steps))); if(s>=steps)clearInterval(id); },1200/steps);
+    return()=>clearInterval(id);
+  },[vis,value]);
   return (
-    <div {...tilt} style={{ transformStyle: 'preserve-3d', ...style }} className={className}>
-      {children}
+    <div ref={ref} style={{
+      opacity:vis?1:0, transform:vis?'none':'translateY(24px)',
+      transition:`all .7s cubic-bezier(.22,1,.36,1) ${delay}s`,
+    }}>
+      <div style={{ fontSize:size, fontFamily:"'Bebas Neue',sans-serif", fontWeight:900, color, lineHeight:1, textShadow:`0 0 30px ${color}88` }}>
+        {isNaN(parseInt(value))?value:n}{unit}
+      </div>
     </div>
   );
 }
 
-/* ─────────────────────────────────────────────
-   COMPONENT: 3D Hero Canvas (Three.js)
-───────────────────────────────────────────── */
-function HeroCanvas() {
-  const mountRef = useRef(null);
-  const sceneRef = useRef(null);
+/* ── Three.js Hero ── */
+function HeroScene() {
+  const mount = useRef(null);
+  useEffect(()=>{
+    const el=mount.current; if(!el)return;
+    const W=el.clientWidth, H=el.clientHeight, isMob=window.innerWidth<600;
+    const scene=new THREE.Scene();
+    const cam=new THREE.PerspectiveCamera(55,W/H,0.1,300);
+    cam.position.set(0,0,isMob?26:18);
+    const rdr=new THREE.WebGLRenderer({antialias:!isMob,alpha:true});
+    rdr.setPixelRatio(Math.min(devicePixelRatio,2));
+    rdr.setSize(W,H); rdr.setClearColor(0,0);
+    el.appendChild(rdr.domElement);
 
-  useEffect(() => {
-    const el = mountRef.current;
-    if (!el) return;
-    const W = el.clientWidth, H = el.clientHeight;
-    const isMobile = window.innerWidth < 600;
+    /* Icosahedron wireframe */
+    const icoMat=new THREE.MeshBasicMaterial({color:0xf72585,wireframe:true,transparent:true,opacity:.18});
+    const ico=new THREE.Mesh(new THREE.IcosahedronGeometry(5.5,2),icoMat); scene.add(ico);
+    const ico2=new THREE.Mesh(new THREE.IcosahedronGeometry(3.8,1),new THREE.MeshBasicMaterial({color:0x4cc9f0,wireframe:true,transparent:true,opacity:.14})); scene.add(ico2);
 
-    // Scene
-    const scene    = new THREE.Scene();
-    const camera   = new THREE.PerspectiveCamera(60, W / H, 0.1, 200);
-    camera.position.set(0, 0, isMobile ? 22 : 16);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: !isMobile, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(W, H);
-    renderer.setClearColor(0x000000, 0);
-    el.appendChild(renderer.domElement);
-    sceneRef.current = { scene, camera, renderer };
-
-    // ── WAVEFORM RING ──────────────────────────────────────────
-    const POINTS = isMobile ? 80 : 160;
-    const RADIUS = 7;
-    const waveGeo = new THREE.BufferGeometry();
-    const wavePos = new Float32Array(POINTS * 3);
-    const waveBase= new Float32Array(POINTS); // original Y
-    for (let i = 0; i < POINTS; i++) {
-      const a = (i / POINTS) * Math.PI * 2;
-      wavePos[i * 3]     = Math.cos(a) * RADIUS;
-      wavePos[i * 3 + 1] = 0;
-      wavePos[i * 3 + 2] = Math.sin(a) * RADIUS;
-      waveBase[i] = a;
-    }
-    waveGeo.setAttribute('position', new THREE.BufferAttribute(wavePos, 3));
-    const waveMat = new THREE.LineBasicMaterial({ color: 0xf72585, linewidth: 2 });
-    const waveLoop = new THREE.LineLoop(waveGeo, waveMat);
-    scene.add(waveLoop);
-
-    // Second ring (cyan, offset)
-    const waveGeo2 = waveGeo.clone();
-    const waveMat2 = new THREE.LineBasicMaterial({ color: 0x4cc9f0, linewidth: 2 });
-    const waveLoop2 = new THREE.LineLoop(waveGeo2, waveMat2);
-    waveLoop2.rotation.x = Math.PI / 6;
-    waveLoop2.scale.setScalar(0.75);
-    scene.add(waveLoop2);
-
-    // Third ring (green)
-    const waveGeo3 = waveGeo.clone();
-    const waveMat3 = new THREE.LineBasicMaterial({ color: 0x06d6a0, linewidth: 1 });
-    const waveLoop3 = new THREE.LineLoop(waveGeo3, waveMat3);
-    waveLoop3.rotation.x = -Math.PI / 5;
-    waveLoop3.scale.setScalar(0.55);
-    scene.add(waveLoop3);
-
-    // ── TORUS KNOT (center piece) ──────────────────────────────
-    const knotGeo = new THREE.TorusKnotGeometry(2.2, 0.4, 120, 16, 3, 5);
-    const knotMat = new THREE.MeshStandardMaterial({
-      color: 0xf72585, emissive: 0xf72585, emissiveIntensity: 0.4,
-      metalness: 0.8, roughness: 0.2,
-    });
-    const knot = new THREE.Mesh(knotGeo, knotMat);
+    /* Torus knot core */
+    const knot=new THREE.Mesh(new THREE.TorusKnotGeometry(2,0.45,140,18,3,5),new THREE.MeshStandardMaterial({color:0xf72585,emissive:0xf72585,emissiveIntensity:.5,metalness:.9,roughness:.1}));
     scene.add(knot);
 
-    // ── FLOATING PARTICLES ─────────────────────────────────────
-    const NPART = isMobile ? 200 : 500;
-    const pGeo  = new THREE.BufferGeometry();
-    const pPos  = new Float32Array(NPART * 3);
-    const pCol  = new Float32Array(NPART * 3);
-    const COLORS = [[0xf7, 0x25, 0x85], [0x4c, 0xc9, 0xf0], [0x06, 0xd6, 0xa0]];
-    for (let i = 0; i < NPART; i++) {
-      const r = 6 + Math.random() * 14;
-      const θ = Math.random() * Math.PI * 2;
-      const φ = Math.acos(2 * Math.random() - 1);
-      pPos[i*3]   = r * Math.sin(φ) * Math.cos(θ);
-      pPos[i*3+1] = r * Math.sin(φ) * Math.sin(θ);
-      pPos[i*3+2] = r * Math.cos(φ);
-      const c = COLORS[Math.floor(Math.random() * 3)];
-      pCol[i*3] = c[0]/255; pCol[i*3+1] = c[1]/255; pCol[i*3+2] = c[2]/255;
-    }
-    pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
-    pGeo.setAttribute('color',    new THREE.BufferAttribute(pCol, 3));
-    const pMat = new THREE.PointsMaterial({ size: isMobile ? 0.12 : 0.09, vertexColors: true, transparent: true, opacity: 0.85 });
-    const particles = new THREE.Points(pGeo, pMat);
-    scene.add(particles);
-
-    // ── LIGHTS ────────────────────────────────────────────────
-    const amb = new THREE.AmbientLight(0xffffff, 0.3);
-    scene.add(amb);
-    const ptPink = new THREE.PointLight(0xf72585, 4, 30);
-    ptPink.position.set(6, 4, 4);
-    scene.add(ptPink);
-    const ptCyan = new THREE.PointLight(0x4cc9f0, 4, 30);
-    ptCyan.position.set(-6, -4, 4);
-    scene.add(ptCyan);
-
-    // ── MOUSE PARALLAX ────────────────────────────────────────
-    let mx = 0, my = 0;
-    const onMouse = (e) => {
-      mx = (e.clientX / window.innerWidth  - 0.5) * 2;
-      my = (e.clientY / window.innerHeight - 0.5) * 2;
+    /* Waveform rings */
+    const N=isMob?100:200, R=8;
+    const mkRing=(col,scale=1,rx=0)=>{
+      const geo=new THREE.BufferGeometry(); const pos=new Float32Array(N*3); const base=[];
+      for(let i=0;i<N;i++){const a=(i/N)*Math.PI*2; pos[i*3]=Math.cos(a)*R*scale; pos[i*3+1]=0; pos[i*3+2]=Math.sin(a)*R*scale; base.push(a);}
+      geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+      const loop=new THREE.LineLoop(geo,new THREE.LineBasicMaterial({color:col})); loop.rotation.x=rx;
+      scene.add(loop); return{geo,loop,base};
     };
-    window.addEventListener('mousemove', onMouse);
+    const ring1=mkRing(0xf72585,1.0,0);
+    const ring2=mkRing(0x4cc9f0,0.78,Math.PI/5);
+    const ring3=mkRing(0x06d6a0,0.55,-Math.PI/4);
 
-    // ── ANIMATE ───────────────────────────────────────────────
-    let frameId, t = 0;
-    const amp = [1.2, 0.8, 0.6, 1.0, 0.9, 1.3];
-    const frq = [1.2, 2.1, 3.0, 1.7, 2.5, 0.9];
+    /* Particles */
+    const NP=isMob?300:700; const pPos=new Float32Array(NP*3); const pCol=new Float32Array(NP*3);
+    const PC=[[247,37,133],[76,201,240],[6,214,160],[123,47,247]];
+    for(let i=0;i<NP;i++){
+      const r2=8+Math.random()*18,th=Math.random()*Math.PI*2,ph=Math.acos(2*Math.random()-1);
+      pPos[i*3]=r2*Math.sin(ph)*Math.cos(th); pPos[i*3+1]=r2*Math.sin(ph)*Math.sin(th); pPos[i*3+2]=r2*Math.cos(ph);
+      const c=PC[Math.floor(Math.random()*PC.length)]; pCol[i*3]=c[0]/255; pCol[i*3+1]=c[1]/255; pCol[i*3+2]=c[2]/255;
+    }
+    const pGeo=new THREE.BufferGeometry();
+    pGeo.setAttribute('position',new THREE.BufferAttribute(pPos,3));
+    pGeo.setAttribute('color',new THREE.BufferAttribute(pCol,3));
+    const pts=new THREE.Points(pGeo,new THREE.PointsMaterial({size:.11,vertexColors:true,transparent:true,opacity:.88}));
+    scene.add(pts);
 
-    const animate = () => {
-      frameId = requestAnimationFrame(animate);
-      t += 0.016;
+    /* Lights */
+    scene.add(new THREE.AmbientLight(0xffffff,.4));
+    const lP=new THREE.PointLight(0xf72585,5,40); lP.position.set(8,5,5); scene.add(lP);
+    const lC=new THREE.PointLight(0x4cc9f0,5,40); lC.position.set(-8,-5,5); scene.add(lC);
+    const lG=new THREE.PointLight(0x06d6a0,3,30); lG.position.set(0,10,-5); scene.add(lG);
 
-      // Waveform pulse
-      [waveGeo, waveGeo2, waveGeo3].forEach((geo, gi) => {
-        const pos = geo.attributes.position;
-        const scale = gi === 0 ? RADIUS : gi === 1 ? RADIUS * 0.75 : RADIUS * 0.55;
-        for (let i = 0; i < POINTS; i++) {
-          const a = waveBase[i];
-          const wave = Math.sin(a * 6 + t * 2 + gi * 1.2) * amp[i % 6] * 0.5
-                     + Math.sin(a * 3 - t * 1.5 + gi * 0.8) * 0.3;
-          const r = scale + wave;
-          pos.setXYZ(i,
-            Math.cos(a) * r + (gi === 0 ? wave * 0.2 : 0),
-            Math.sin(a * 4 + t * 1.2 + gi) * amp[i % 6] * 0.3,
-            Math.sin(a) * r
-          );
+    let mx=0,my=0;
+    const onMouse=e=>{mx=(e.clientX/innerWidth-.5)*2; my=(e.clientY/innerHeight-.5)*2;};
+    addEventListener('mousemove',onMouse);
+    const onResize=()=>{const w=el.clientWidth,h=el.clientHeight; cam.aspect=w/h; cam.updateProjectionMatrix(); rdr.setSize(w,h);};
+    addEventListener('resize',onResize);
+
+    let fid,t=0,lastT=0;
+    const amp=[1.4,.9,.7,1.1,1.0,1.3];
+    const animate=()=>{
+      fid=requestAnimationFrame(animate); t+=.016;
+      /* Waveform */
+      [ring1,ring2,ring3].forEach(({geo,loop,base},gi)=>{
+        const sc=[R,R*.78,R*.55][gi]; const pos=geo.attributes.position;
+        for(let i=0;i<N;i++){
+          const a=base[i];
+          const w=Math.sin(a*8+t*2.2+gi*1.4)*amp[i%6]*.55+Math.sin(a*3-t*1.8+gi*.9)*.35;
+          const rr=sc+w;
+          pos.setXYZ(i,Math.cos(a)*rr+w*.12,Math.sin(a*5+t*1.3+gi)*.5,Math.sin(a)*rr);
         }
-        pos.needsUpdate = true;
+        pos.needsUpdate=true;
       });
-
-      // Rotate rings
-      waveLoop.rotation.y  = t * 0.18;
-      waveLoop.rotation.z  = t * 0.06;
-      waveLoop2.rotation.y = -t * 0.22;
-      waveLoop2.rotation.z = t * 0.10;
-      waveLoop3.rotation.y = t * 0.28;
-      waveLoop3.rotation.x = -Math.PI / 5 + Math.sin(t * 0.3) * 0.2;
-
-      // Torus knot
-      knot.rotation.x = t * 0.25;
-      knot.rotation.y = t * 0.35;
-      knot.scale.setScalar(1 + Math.sin(t * 1.5) * 0.04);
-
-      // Particles drift
-      particles.rotation.y = t * 0.04;
-      particles.rotation.x = Math.sin(t * 0.1) * 0.05;
-
-      // Mouse parallax
-      scene.rotation.y += (mx * 0.2 - scene.rotation.y) * 0.05;
-      scene.rotation.x += (-my * 0.1 - scene.rotation.x) * 0.05;
-
-      // Light pulse
-      ptPink.intensity = 3 + Math.sin(t * 2.1) * 1.5;
-      ptCyan.intensity = 3 + Math.sin(t * 1.7 + 1) * 1.5;
-
-      renderer.render(scene, camera);
+      ring1.loop.rotation.y=t*.16; ring1.loop.rotation.z=t*.05;
+      ring2.loop.rotation.y=-t*.20; ring2.loop.rotation.z=t*.09; ring2.loop.rotation.x=Math.PI/5+Math.sin(t*.25)*.1;
+      ring3.loop.rotation.y=t*.26; ring3.loop.rotation.x=-Math.PI/4+Math.sin(t*.3)*.12;
+      /* Knot */
+      knot.rotation.x=t*.22; knot.rotation.y=t*.32; knot.scale.setScalar(1+Math.sin(t*1.4)*.045);
+      /* Ico */
+      ico.rotation.x=t*.07; ico.rotation.y=t*.11;
+      ico2.rotation.x=-t*.09; ico2.rotation.y=t*.13; ico2.rotation.z=t*.05;
+      /* Particles */
+      pts.rotation.y=t*.035; pts.rotation.x=Math.sin(t*.08)*.04;
+      /* Mouse parallax */
+      scene.rotation.y+=(mx*.25-scene.rotation.y)*.04;
+      scene.rotation.x+=(-my*.12-scene.rotation.x)*.04;
+      /* Lights pulse */
+      lP.intensity=4+Math.sin(t*2.1)*2; lC.intensity=4+Math.sin(t*1.7+1)*2; lG.intensity=2+Math.sin(t*1.3+2)*1;
+      rdr.render(scene,cam);
     };
     animate();
 
-    // ── RESIZE ───────────────────────────────────────────────
-    const onResize = () => {
-      const w = el.clientWidth, h = el.clientHeight;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+    return()=>{
+      cancelAnimationFrame(fid);
+      removeEventListener('mousemove',onMouse);
+      removeEventListener('resize',onResize);
+      rdr.dispose();
+      if(el.contains(rdr.domElement))el.removeChild(rdr.domElement);
     };
-    window.addEventListener('resize', onResize);
-
-    return () => {
-      cancelAnimationFrame(frameId);
-      window.removeEventListener('mousemove', onMouse);
-      window.removeEventListener('resize', onResize);
-      renderer.dispose();
-      if (el.contains(renderer.domElement)) el.removeChild(renderer.domElement);
-    };
-  }, []);
-
-  return (
-    <div ref={mountRef} style={{
-      position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none',
-    }} />
-  );
+  },[]);
+  return <div ref={mount} style={{position:'absolute',inset:0,zIndex:0,pointerEvents:'none'}}/>;
 }
 
-/* ─────────────────────────────────────────────
-   COMPONENT: Scroll Reveal Wrapper
-───────────────────────────────────────────── */
-function Reveal({ children, delay = 0, y = 40, style }) {
-  const ref  = useRef(null);
-  const [vis, setVis] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(([e]) => {
-      if (e.isIntersecting) { setVis(true); obs.disconnect(); }
-    }, { threshold: 0.12 });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
-  return (
-    <div ref={ref} style={{
-      transform: vis ? 'none' : `translateY(${y}px)`,
-      opacity:   vis ? 1 : 0,
-      transition: `transform 0.7s cubic-bezier(0.22,1,0.36,1) ${delay}s, opacity 0.6s ease ${delay}s`,
-      ...style,
-    }}>
-      {children}
+/* ── Floating Tag ── */
+function Tag({name,device,color,style}){
+  return(
+    <div style={{display:'inline-flex',alignItems:'center',gap:'8px',background:`rgba(${color},.1)`,border:`1px solid rgba(${color},.35)`,borderRadius:'30px',padding:'7px 16px',backdropFilter:'blur(12px)',whiteSpace:'nowrap',...style}}>
+      <span style={{width:7,height:7,borderRadius:'50%',background:`rgb(${color})`,display:'inline-block',boxShadow:`0 0 8px rgb(${color})`}}/>
+      <span style={{fontSize:'12px',fontWeight:'700',color:`rgb(${color})`}}>{name}</span>
+      <span style={{fontSize:'11px',color:`rgba(${color},.65)`,fontFamily:"'JetBrains Mono',monospace"}}>{device}</span>
     </div>
   );
 }
 
-/* ─────────────────────────────────────────────
-   COMPONENT: 3D Stat Counter
-───────────────────────────────────────────── */
-function StatCounter({ value, unit, label, color, delay }) {
-  const [count, setCount] = useState(0);
-  const [vis, setVis]     = useState(false);
-  const ref = useRef(null);
-  useEffect(() => {
-    const obs = new IntersectionObserver(([e]) => {
-      if (e.isIntersecting) { setVis(true); obs.disconnect(); }
-    }, { threshold: 0.5 });
-    obs.observe(ref.current);
-    return () => obs.disconnect();
-  }, []);
-  useEffect(() => {
-    if (!vis || isNaN(parseInt(value))) return;
-    const target = parseInt(value);
-    const dur = 1400, steps = 50;
-    let step = 0;
-    const id = setInterval(() => {
-      step++;
-      setCount(Math.round(target * (step / steps)));
-      if (step >= steps) clearInterval(id);
-    }, dur / steps);
-    return () => clearInterval(id);
-  }, [vis, value]);
-
-  const display = isNaN(parseInt(value)) ? value : count;
-
-  return (
-    <div ref={ref} style={{
-      background: 'rgba(255,255,255,0.03)',
-      border: `1px solid ${color}33`,
-      borderRadius: '20px',
-      padding: '28px 24px',
-      textAlign: 'center',
-      backdropFilter: 'blur(20px)',
-      transform: vis ? `perspective(600px) rotateX(0deg) translateY(0)` : `perspective(600px) rotateX(20deg) translateY(30px)`,
-      opacity: vis ? 1 : 0,
-      transition: `all 0.7s cubic-bezier(0.22,1,0.36,1) ${delay}s`,
-      boxShadow: vis ? `0 0 30px ${color}22, inset 0 0 20px ${color}08` : 'none',
-    }}>
-      <div style={{
-        fontSize: '42px', fontWeight: '900',
-        fontFamily: "'Bebas Neue', sans-serif",
-        letterSpacing: '2px', color,
-        textShadow: `0 0 20px ${color}88`,
-      }}>
-        {display}<span style={{ fontSize: '20px' }}>{unit}</span>
-      </div>
-      <div style={{ fontSize: '12px', color: 'var(--sub)', marginTop: '6px', fontWeight: '600', letterSpacing: '1px', textTransform: 'uppercase' }}>{label}</div>
-    </div>
-  );
-}
-
-/* ─────────────────────────────────────────────
-   COMPONENT: Floating 3D Device Card
-───────────────────────────────────────────── */
-function FloatingDevice({ name, device, color, delay, x, y }) {
-  const [vis, setVis] = useState(false);
-  const ref = useRef(null);
-  useEffect(() => {
-    const obs = new IntersectionObserver(([e]) => {
-      if (e.isIntersecting) setVis(true);
-    }, { threshold: 0.1 });
-    obs.observe(ref.current);
-    return () => obs.disconnect();
-  }, []);
-  return (
-    <div ref={ref} style={{
-      position: 'absolute', left: x, top: y,
-      transform: vis ? 'translateY(0) scale(1)' : 'translateY(20px) scale(0.9)',
-      opacity: vis ? 1 : 0,
-      transition: `all 0.8s cubic-bezier(0.22,1,0.36,1) ${delay}s`,
-      animation: vis ? `float3d ${2.5 + delay}s ease-in-out ${delay}s infinite alternate` : 'none',
-    }}>
-      <div style={{
-        background: `rgba(${color},0.08)`,
-        border: `1px solid rgba(${color},0.3)`,
-        borderRadius: '12px',
-        padding: '8px 14px',
-        fontSize: '11px',
-        fontFamily: "'JetBrains Mono', monospace",
-        color: `rgba(${color},1)`,
-        backdropFilter: 'blur(10px)',
-        whiteSpace: 'nowrap',
-        boxShadow: `0 0 20px rgba(${color},0.15)`,
-      }}>
-        <span style={{ marginRight: '6px' }}>●</span>{name} · {device}
+/* ── Horizontal Scroll Strip ── */
+function MarqueeStrip(){
+  const items=['🎵 Dead Reckoning Sync','⚡ Atomic Playback','🎧 BT Auto-Detect','🔒 Zero Data Storage','📲 QR Invite','🌙 Wake Lock API','💬 Live Chat','🔔 Lock Screen Controls','🔑 Password Rooms','👑 Admin Controls','🎛️ DJ Desk','🌍 Works Anywhere'];
+  return(
+    <div style={{overflow:'hidden',padding:'18px 0',borderTop:'1px solid rgba(255,255,255,0.07)',borderBottom:'1px solid rgba(255,255,255,0.07)',background:'rgba(0,0,0,0.3)'}}>
+      <div style={{display:'flex',gap:'40px',animation:'marqueeScroll 28s linear infinite',width:'max-content'}}>
+        {[...items,...items].map((item,i)=>(
+          <span key={i} style={{fontSize:'13px',fontWeight:'700',color:'#888899',letterSpacing:'1.5px',textTransform:'uppercase',flexShrink:0,whiteSpace:'nowrap'}}>
+            {item}
+          </span>
+        ))}
       </div>
     </div>
   );
 }
 
-/* ═══════════════════════════════════════════
-   MAIN HOME PAGE
-═══════════════════════════════════════════ */
+/* ── Step Card with 3D number ── */
+function StepCard({n,icon,title,desc,color,delay}){
+  return(
+    <Reveal delay={delay} scale>
+      <Tilt s={8} style={{height:'100%'}}>
+        <div style={{background:'rgba(255,255,255,0.025)',border:`1px solid rgba(255,255,255,0.08)`,borderRadius:'28px',padding:'36px 32px',height:'100%',position:'relative',overflow:'hidden',transition:'border-color .3s,box-shadow .3s',cursor:'default'}}
+          onMouseEnter={e=>{e.currentTarget.style.borderColor=`${color}55`;e.currentTarget.style.boxShadow=`0 28px 70px ${color}20`;}}
+          onMouseLeave={e=>{e.currentTarget.style.borderColor='rgba(255,255,255,0.08)';e.currentTarget.style.boxShadow='none';}}>
+          {/* Giant background number */}
+          <div style={{position:'absolute',right:'-8px',top:'-12px',fontFamily:"'Bebas Neue',sans-serif",fontSize:'140px',lineHeight:1,color:'rgba(255,255,255,0.03)',userSelect:'none',pointerEvents:'none'}}>{n}</div>
+          {/* Glow corner */}
+          <div style={{position:'absolute',top:0,left:0,width:'80px',height:'80px',background:`radial-gradient(circle at 0 0,${color}25,transparent)`,borderRadius:'28px 0 0 0'}}/>
+          <div style={{fontSize:'40px',marginBottom:'20px'}}>{icon}</div>
+          <div style={{fontSize:'11px',fontWeight:'800',letterSpacing:'3px',textTransform:'uppercase',color,marginBottom:'12px'}}>{n}</div>
+          <div style={{fontSize:'20px',fontWeight:'800',color:'#f0f0ff',marginBottom:'14px',lineHeight:1.2}}>{title}</div>
+          <div style={{fontSize:'14px',color:'#a0a0c0',lineHeight:1.75}}>{desc}</div>
+        </div>
+      </Tilt>
+    </Reveal>
+  );
+}
+
+/* ── Feature Card ── */
+function FeatCard({icon,title,desc,live,delay}){
+  return(
+    <Reveal delay={delay} y={50}>
+      <Tilt s={6} style={{height:'100%'}}>
+        <div style={{background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.07)',borderRadius:'22px',padding:'28px 26px',height:'100%',transition:'all .3s',cursor:'default'}}
+          onMouseEnter={e=>{e.currentTarget.style.background='rgba(76,201,240,0.04)';e.currentTarget.style.borderColor='rgba(76,201,240,0.3)';e.currentTarget.style.boxShadow='0 20px 60px rgba(76,201,240,0.10)';}}
+          onMouseLeave={e=>{e.currentTarget.style.background='rgba(255,255,255,0.02)';e.currentTarget.style.borderColor='rgba(255,255,255,0.07)';e.currentTarget.style.boxShadow='none';}}>
+          <div style={{fontSize:'30px',marginBottom:'16px'}}>{icon}</div>
+          <div style={{fontSize:'15px',fontWeight:'800',color:'#eeeeff',marginBottom:'10px'}}>{title}</div>
+          <div style={{fontSize:'13px',color:'#8888aa',lineHeight:1.75,marginBottom:'16px'}}>{desc}</div>
+          <span style={{display:'inline-block',padding:'4px 12px',borderRadius:'20px',fontSize:'10px',fontWeight:'800',letterSpacing:'1.5px',background:live?'rgba(6,214,160,0.15)':'rgba(255,214,10,0.1)',color:live?'#06d6a0':'#ffd60a',border:live?'1px solid rgba(6,214,160,0.3)':'1px solid rgba(255,214,10,0.25)'}}>{live?'LIVE':'SOON'}</span>
+        </div>
+      </Tilt>
+    </Reveal>
+  );
+}
+
+/* ── Use Case Card ── */
+function CaseCard({emoji,title,desc,grad,border,delay}){
+  return(
+    <Reveal delay={delay} y={60} scale>
+      <Tilt s={7} style={{height:'100%'}}>
+        <div style={{background:grad,border:`1px solid ${border}`,borderRadius:'28px',padding:'40px 32px',height:'100%',transition:'transform .3s,box-shadow .3s',cursor:'default'}}
+          onMouseEnter={e=>{e.currentTarget.style.boxShadow=`0 32px 80px ${border.replace('0.22','0.18')}`;}}
+          onMouseLeave={e=>{e.currentTarget.style.boxShadow='none';}}>
+          <div style={{fontSize:'44px',marginBottom:'20px'}}>{emoji}</div>
+          <div style={{fontSize:'19px',fontWeight:'800',color:'#f4f4ff',marginBottom:'14px'}}>{title}</div>
+          <div style={{fontSize:'14px',color:'#aaaacc',lineHeight:1.75}}>{desc}</div>
+        </div>
+      </Tilt>
+    </Reveal>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════
+   MAIN
+══════════════════════════════════════════════════════════════ */
 export default function Home({ setView }) {
-  const [stats,   setStats]   = useState({ rooms: 0, listeners: 0 });
+  const [stats,   setStats]   = useState({ rooms:0, listeners:0 });
   const [openFaq, setOpenFaq] = useState(null);
-  const [scrollY, setScrollY] = useState(0);
+  const [navSolid,setNavSolid]= useState(false);
 
-  useEffect(() => {
-    fetch('/stats').then(r => r.json()).then(setStats).catch(() => {});
-    const id = setInterval(() => fetch('/stats').then(r => r.json()).then(setStats).catch(() => {}), 30000);
-    const onScroll = () => setScrollY(window.scrollY);
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => { clearInterval(id); window.removeEventListener('scroll', onScroll); };
-  }, []);
+  useEffect(()=>{
+    fetch('/stats').then(r=>r.json()).then(setStats).catch(()=>{});
+    const id=setInterval(()=>fetch('/stats').then(r=>r.json()).then(setStats).catch(()=>{}),30000);
+    const onScroll=()=>setNavSolid(window.scrollY>60);
+    addEventListener('scroll',onScroll,{passive:true});
+    return()=>{ clearInterval(id); removeEventListener('scroll',onScroll); };
+  },[]);
 
-  const parallax = (speed) => ({ transform: `translateY(${scrollY * speed}px)` });
+  const go  = ()=>{ setView('app-entry'); window.scrollTo(0,0); };
+  const nav = id=>document.getElementById(id)?.scrollIntoView({behavior:'smooth'});
 
-  return (
-    <div style={{ background: '#06060f', color: 'var(--text)', overflowX: 'hidden' }}>
+  return(
+    <div style={{background:'#050510',color:'#e8e8ff',overflowX:'hidden',fontFamily:"'DM Sans',sans-serif"}}>
 
       <style>{`
-        @keyframes float3d {
-          from { transform: translateY(0px) rotateX(0deg); }
-          to   { transform: translateY(-10px) rotateX(3deg); }
-        }
-        @keyframes spin3d {
-          from { transform: rotateY(0deg); }
-          to   { transform: rotateY(360deg); }
-        }
-        @keyframes pulseGlow {
-          0%,100% { box-shadow: 0 0 30px #f7258555, 0 0 60px #f7258522; }
-          50%      { box-shadow: 0 0 60px #f7258588, 0 0 120px #f7258544; }
-        }
-        @keyframes scanline {
-          0%   { transform: translateY(-100%); }
-          100% { transform: translateY(100vh); }
-        }
-        .hp-nav {
-          position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
-          display: flex; align-items: center; justify-content: space-between;
-          padding: 0 32px; height: 64px;
-          background: rgba(6,6,15,0.75);
-          backdrop-filter: blur(24px);
-          border-bottom: 1px solid rgba(255,255,255,0.06);
-          transition: background 0.3s;
-        }
-        .hp-nav-logo {
-          font-family: 'Bebas Neue', sans-serif;
-          font-size: 28px; letter-spacing: 3px;
-          background: linear-gradient(135deg, #f72585, #4cc9f0);
-          -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-          text-decoration: none;
-        }
-        .hp-nav-links { display: flex; gap: 28px; }
-        .hp-nav-links a {
-          font-size: 13px; font-weight: 600; color: var(--sub);
-          text-decoration: none; letter-spacing: 0.5px;
-          transition: color 0.2s;
-        }
-        .hp-nav-links a:hover { color: var(--text); }
-        .hp-nav-cta {
-          background: linear-gradient(135deg, #f72585, #7b2ff7);
-          color: #fff; border: none; border-radius: 10px;
-          padding: 10px 22px; font-size: 13px; font-weight: 700;
-          cursor: pointer; letter-spacing: 0.5px;
-          box-shadow: 0 0 20px #f7258555;
-          transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .hp-nav-cta:hover { transform: scale(1.05); box-shadow: 0 0 40px #f7258577; }
-        @media(max-width:768px) {
-          .hp-nav-links { display: none; }
-          .hp-nav { padding: 0 20px; }
-        }
+        @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&family=JetBrains+Mono:wght@400;700&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0;}
+        ::selection{background:#f7258555;color:#fff;}
 
-        .hero-3d {
-          position: relative; min-height: 100vh;
-          display: flex; flex-direction: column;
-          align-items: center; justify-content: center;
-          overflow: hidden; padding: 100px 24px 60px;
-        }
-        .hero-content { position: relative; z-index: 2; text-align: center; max-width: 800px; }
-        .hero-eyebrow-3d {
-          display: inline-flex; align-items: center; gap: 8px;
-          background: rgba(247,37,133,0.1); border: 1px solid rgba(247,37,133,0.3);
-          border-radius: 20px; padding: 6px 16px; margin-bottom: 32px;
-          font-size: 12px; font-weight: 700; letter-spacing: 2px;
-          text-transform: uppercase; color: #f72585;
-        }
-        .hero-title-3d {
-          font-family: 'Bebas Neue', sans-serif;
-          font-size: clamp(72px, 15vw, 160px);
-          line-height: 0.9; margin: 0 0 24px; letter-spacing: -2px;
-          background: linear-gradient(135deg, #fff 0%, #f72585 50%, #4cc9f0 100%);
-          -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-          filter: drop-shadow(0 0 40px rgba(247,37,133,0.4));
-        }
-        .hero-sub-3d {
-          font-size: clamp(15px, 2.5vw, 19px); color: var(--sub);
-          line-height: 1.7; max-width: 600px; margin: 0 auto 40px;
-        }
-        .hero-btns-3d { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
-        .btn-3d-primary {
-          background: linear-gradient(135deg, #f72585, #7b2ff7);
-          border: none; border-radius: 14px; padding: 16px 36px;
-          font-size: 16px; font-weight: 800; color: #fff; cursor: pointer;
-          box-shadow: 0 8px 32px #f7258555, 0 0 0 1px rgba(255,255,255,0.1) inset;
-          animation: pulseGlow 3s ease-in-out infinite;
-          transition: transform 0.2s;
-        }
-        .btn-3d-primary:hover { transform: translateY(-3px) scale(1.03); }
-        .btn-3d-ghost {
-          background: rgba(255,255,255,0.05);
-          border: 1px solid rgba(255,255,255,0.12); border-radius: 14px;
-          padding: 16px 36px; font-size: 16px; font-weight: 700;
-          color: var(--text); cursor: pointer;
-          backdrop-filter: blur(10px); transition: all 0.2s;
-        }
-        .btn-3d-ghost:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.25); }
+        /* ── Nav ── */
+        .nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:center;justify-content:space-between;padding:0 44px;height:68px;transition:background .4s,border-color .4s,backdrop-filter .4s;}
+        .nav.solid{background:rgba(5,5,16,.85);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px);border-bottom:1px solid rgba(255,255,255,0.07);}
+        .nav-logo{font-family:'Bebas Neue',sans-serif;font-size:32px;letter-spacing:5px;background:linear-gradient(135deg,#f72585,#4cc9f0);-webkit-background-clip:text;-webkit-text-fill-color:transparent;cursor:pointer;}
+        .nav-links{display:flex;gap:36px;}
+        .nav-links a{font-size:13px;font-weight:700;color:#7070a0;text-decoration:none;letter-spacing:.5px;transition:color .2s;}
+        .nav-links a:hover{color:#e8e8ff;}
+        .nav-cta{background:linear-gradient(135deg,#f72585,#7b2ff7);color:#fff;border:none;border-radius:12px;padding:11px 26px;font-size:13px;font-weight:800;cursor:pointer;letter-spacing:.5px;box-shadow:0 0 28px #f7258550;transition:transform .2s,box-shadow .2s;}
+        .nav-cta:hover{transform:scale(1.07) translateY(-1px);box-shadow:0 0 48px #f7258580;}
+        @media(max-width:768px){.nav-links{display:none;}.nav{padding:0 22px;}}
 
-        .stats-3d {
-          display: grid; grid-template-columns: repeat(4,1fr); gap: 16px;
-          max-width: 800px; margin: 60px auto 0; width: 100%;
-        }
-        @media(max-width:600px) {
-          .stats-3d { grid-template-columns: repeat(2,1fr); }
-        }
+        /* ── Buttons ── */
+        .btn-primary{background:linear-gradient(135deg,#f72585,#7b2ff7);border:none;border-radius:16px;padding:18px 44px;font-size:17px;font-weight:800;color:#fff;cursor:pointer;box-shadow:0 10px 36px #f7258555,0 0 0 1px rgba(255,255,255,0.08) inset;transition:transform .2s,box-shadow .2s;letter-spacing:.3px;}
+        .btn-primary:hover{transform:translateY(-4px) scale(1.04);box-shadow:0 20px 56px #f7258577;}
+        .btn-ghost{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.14);border-radius:16px;padding:18px 44px;font-size:17px;font-weight:700;color:#d0d0f0;cursor:pointer;backdrop-filter:blur(10px);transition:all .2s;letter-spacing:.3px;}
+        .btn-ghost:hover{background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.28);color:#fff;transform:translateY(-2px);}
 
-        .section-3d { padding: 120px 24px; position: relative; }
-        .section-label-3d {
-          display: inline-flex; align-items: center; gap: 8px;
-          font-size: 11px; font-weight: 700; letter-spacing: 3px;
-          text-transform: uppercase; color: #f72585; margin-bottom: 16px;
-        }
-        .section-title-3d {
-          font-family: 'Bebas Neue', sans-serif;
-          font-size: clamp(40px, 7vw, 80px);
-          line-height: 0.95; letter-spacing: -1px; color: #fff;
-          margin: 0 0 20px;
-        }
-        .section-sub-3d { font-size: 16px; color: var(--sub); line-height: 1.7; max-width: 500px; }
+        /* ── Marquee ── */
+        @keyframes marqueeScroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
 
-        .steps-3d {
-          display: grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr));
-          gap: 20px; max-width: 1100px; margin: 64px auto 0;
-        }
-        .step-3d {
-          background: rgba(255,255,255,0.02);
-          border: 1px solid rgba(255,255,255,0.07);
-          border-radius: 24px; padding: 32px 28px;
-          position: relative; overflow: hidden;
-          transition: border-color 0.3s, box-shadow 0.3s;
-        }
-        .step-3d::before {
-          content: ''; position: absolute; inset: 0;
-          background: linear-gradient(135deg, rgba(247,37,133,0.06), transparent);
-          opacity: 0; transition: opacity 0.3s;
-        }
-        .step-3d:hover::before { opacity: 1; }
-        .step-3d:hover { border-color: rgba(247,37,133,0.3); box-shadow: 0 20px 60px rgba(247,37,133,0.12); }
-        .step-num-3d {
-          font-family: 'Bebas Neue', sans-serif;
-          font-size: 80px; line-height: 1;
-          background: linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
-          -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-          position: absolute; top: 16px; right: 20px;
-        }
-        .step-icon-3d { font-size: 36px; margin-bottom: 16px; }
-        .step-title-3d { font-size: 18px; font-weight: 800; margin-bottom: 10px; }
-        .step-desc-3d { font-size: 14px; color: var(--sub); line-height: 1.65; }
+        /* ── Glows ── */
+        @keyframes pulseGlow{0%,100%{box-shadow:0 0 32px #f7258555,0 0 80px #f7258520;}50%{box-shadow:0 0 64px #f7258588,0 0 140px #f7258540;}}
+        @keyframes floatY{0%,100%{transform:translateY(0);}50%{transform:translateY(-14px);}}
+        @keyframes spinSlow{to{transform:rotate(360deg);}}
+        @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
 
-        .features-3d {
-          display: grid; grid-template-columns: repeat(auto-fit,minmax(300px,1fr));
-          gap: 20px; max-width: 1100px; margin: 64px auto 0;
-        }
-        .feat-3d {
-          background: rgba(255,255,255,0.025);
-          border: 1px solid rgba(255,255,255,0.07);
-          border-radius: 20px; padding: 28px;
-          position: relative; overflow: hidden;
-          transition: all 0.3s;
-        }
-        .feat-3d:hover {
-          border-color: rgba(76,201,240,0.35);
-          box-shadow: 0 20px 60px rgba(76,201,240,0.10), 0 0 0 1px rgba(76,201,240,0.15);
-        }
-        .feat-icon-3d { font-size: 28px; margin-bottom: 14px; }
-        .feat-title-3d { font-size: 16px; font-weight: 800; margin-bottom: 8px; }
-        .feat-desc-3d { font-size: 13px; color: var(--sub); line-height: 1.6; }
-        .feat-badge-3d {
-          display: inline-block; margin-top: 12px; padding: 3px 10px;
-          border-radius: 20px; font-size: 10px; font-weight: 800; letter-spacing: 1px;
-        }
-        .badge-live { background: rgba(6,214,160,0.15); color: #06d6a0; border: 1px solid rgba(6,214,160,0.3); }
-        .badge-soon { background: rgba(255,214,10,0.1); color: #ffd60a; border: 1px solid rgba(255,214,10,0.25); }
+        /* ── Grids ── */
+        .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;}
+        .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;}
+        .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px;}
+        .grid-auto{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;}
+        .grid-feat{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:18px;}
+        @media(max-width:900px){.grid-4{grid-template-columns:1fr 1fr;}.grid-3{grid-template-columns:1fr 1fr;}.grid-2{grid-template-columns:1fr;}}
+        @media(max-width:600px){.grid-4{grid-template-columns:1fr 1fr;}.grid-3{grid-template-columns:1fr;}}
 
-        .cases-3d {
-          display: grid; grid-template-columns: repeat(auto-fit,minmax(280px,1fr));
-          gap: 20px; max-width: 1100px; margin: 64px auto 0;
-        }
-        .case-3d {
-          border-radius: 24px; padding: 36px 28px; position: relative; overflow: hidden;
-          transition: transform 0.4s cubic-bezier(0.22,1,0.36,1), box-shadow 0.4s;
-        }
+        /* ── Section ── */
+        .section{padding:130px 40px;max-width:1200px;margin:0 auto;}
+        @media(max-width:768px){.section{padding:90px 22px;}}
 
-        .faq-3d { max-width: 760px; margin: 48px auto 0; }
-        .faq-item-3d {
-          border: 1px solid rgba(255,255,255,0.07);
-          border-radius: 16px; margin-bottom: 12px; overflow: hidden;
-          transition: border-color 0.3s;
-        }
-        .faq-item-3d:hover { border-color: rgba(247,37,133,0.3); }
-        .faq-q-3d {
-          padding: 20px 24px; font-size: 15px; font-weight: 700;
-          cursor: pointer; display: flex; justify-content: space-between;
-          align-items: center; user-select: none;
-        }
-        .faq-a-3d {
-          padding: 0 24px; font-size: 14px; color: var(--sub); line-height: 1.7;
-          max-height: 0; overflow: hidden; transition: max-height 0.4s ease, padding 0.3s;
-        }
-        .faq-a-3d.open { max-height: 200px; padding: 0 24px 20px; }
-        .faq-arrow-3d { transition: transform 0.3s; font-size: 18px; color: var(--sub); }
-        .faq-arrow-3d.open { transform: rotate(180deg); color: #f72585; }
+        /* ── FAQ ── */
+        .faq-item{border:1px solid rgba(255,255,255,0.08);border-radius:18px;margin-bottom:12px;overflow:hidden;cursor:pointer;transition:border-color .3s,background .3s;}
+        .faq-item:hover{border-color:rgba(247,37,133,.3);background:rgba(247,37,133,.03);}
+        .faq-q{padding:22px 26px;font-size:15px;font-weight:700;color:#e8e8ff;display:flex;justify-content:space-between;align-items:center;gap:16px;}
+        .faq-a{padding:0 26px;font-size:14px;color:#9090b0;line-height:1.8;max-height:0;overflow:hidden;transition:max-height .45s ease,padding .3s;}
+        .faq-a.open{max-height:220px;padding:0 26px 22px;}
+        .faq-arrow{font-size:20px;color:#555577;transition:transform .3s,color .3s;flex-shrink:0;}
+        .faq-arrow.open{transform:rotate(180deg);color:#f72585;}
 
-        .cta-3d {
-          padding: 140px 24px; text-align: center; position: relative; overflow: hidden;
-        }
-        .cta-glow-3d {
-          position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-          width: 600px; height: 600px; border-radius: 50%;
-          background: radial-gradient(circle, rgba(247,37,133,0.15) 0%, transparent 70%);
-          pointer-events: none;
-        }
-        .cta-title-3d {
-          font-family: 'Bebas Neue', sans-serif;
-          font-size: clamp(60px, 12vw, 130px);
-          line-height: 0.9; letter-spacing: -2px;
-          background: linear-gradient(135deg, #fff, #f72585 60%, #4cc9f0);
-          -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-          margin-bottom: 24px;
-        }
+        /* ── Footer ── */
+        .footer-link{display:block;font-size:14px;color:#606088;text-decoration:none;margin-bottom:14px;transition:color .2s;}
+        .footer-link:hover{color:#c0c0e0;}
+        .footer-label{font-size:10px;font-weight:800;letter-spacing:3px;text-transform:uppercase;color:#444466;margin-bottom:20px;}
 
-        .footer-3d {
-          border-top: 1px solid rgba(255,255,255,0.06);
-          padding: 60px 24px 40px; max-width: 1100px; margin: 0 auto;
-        }
-        .footer-grid-3d {
-          display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 48px; margin-bottom: 48px;
-        }
-        @media(max-width: 768px) {
-          .footer-grid-3d { grid-template-columns: 1fr; gap: 32px; }
-        }
-        .footer-col-3d h4 { font-size: 11px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; color: var(--sub); margin-bottom: 16px; }
-        .footer-col-3d a { display: block; font-size: 14px; color: var(--sub); text-decoration: none; margin-bottom: 10px; transition: color 0.2s; }
-        .footer-col-3d a:hover { color: var(--text); }
+        /* ── Divider ── */
+        .divider{height:1px;background:linear-gradient(90deg,transparent,rgba(247,37,133,.3),rgba(76,201,240,.3),transparent);margin:0;}
+
+        /* ── Scroll indicator ── */
+        @keyframes scrollBounce{0%,100%{transform:translateY(0);}50%{transform:translateY(8px);}}
+
+        /* ── Stat block ── */
+        .stat-block{text-align:center;padding:32px 24px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.07);border-radius:24px;backdrop-filter:blur(20px);}
       `}</style>
 
-      {/* ══════════ NAV ══════════ */}
-      <nav className="hp-nav">
-        <a href="#top" className="hp-nav-logo" onClick={e => { e.preventDefault(); window.scrollTo({top:0,behavior:'smooth'}); }}>HUSHPOD</a>
-        <div className="hp-nav-links">
-          {[['#how','How It Works'],['#features','Features'],['#usecases','Use Cases'],['#tech','Tech'],['#faq','FAQ']].map(([href,label]) => (
-            <a key={href} href={href} onClick={e => { e.preventDefault(); document.querySelector(href)?.scrollIntoView({behavior:'smooth'}); }}>{label}</a>
+      {/* ══ NAV ══ */}
+      <nav className={`nav ${navSolid?'solid':''}`}>
+        <div className="nav-logo" onClick={()=>window.scrollTo({top:0,behavior:'smooth'})}>HUSHPOD</div>
+        <div className="nav-links">
+          {[['how','How It Works'],['features','Features'],['cases','Use Cases'],['tech','Tech'],['faq','FAQ']].map(([id,l])=>(
+            <a key={id} href={`#${id}`} onClick={e=>{e.preventDefault();nav(id);}}>{l}</a>
           ))}
         </div>
-        <button className="hp-nav-cta" onClick={() => { setView('app-entry'); window.scrollTo(0,0); }}>Start Free →</button>
+        <button className="nav-cta" onClick={go}>Start Free →</button>
       </nav>
 
-      {/* ══════════ HERO ══════════ */}
-      <section className="hero-3d">
-        <HeroCanvas />
+      {/* ══ HERO ══ */}
+      <section style={{position:'relative',minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',overflow:'hidden',padding:'120px 28px 80px',textAlign:'center'}}>
+        <HeroScene/>
 
-        {/* Scanline effect */}
-        <div style={{ position:'absolute', inset:0, background:'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px)', pointerEvents:'none', zIndex:1 }} />
+        {/* Deep space glow */}
+        <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:'900px',height:'900px',background:'radial-gradient(circle,rgba(247,37,133,.12) 0%,rgba(76,201,240,.06) 40%,transparent 70%)',pointerEvents:'none',zIndex:1}}/>
+        {/* Scanline */}
+        <div style={{position:'absolute',inset:0,backgroundImage:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,.02) 3px,rgba(0,0,0,.02) 4px)',pointerEvents:'none',zIndex:1}}/>
 
-        <div className="hero-content">
-          <div style={parallax(-0.05)}>
-            <Reveal>
-              <div className="hero-eyebrow-3d">
-                <span style={{ width:6, height:6, borderRadius:'50%', background:'#f72585', animation:'pulseGlow 2s infinite' }} />
-                Live · Synchronized · Private
-              </div>
-            </Reveal>
+        <div style={{position:'relative',zIndex:2,maxWidth:'880px',width:'100%'}}>
 
-            <Reveal delay={0.1}>
-              <h1 className="hero-title-3d">HEAR<br/>TOGETHER</h1>
-            </Reveal>
+          {/* Live badge */}
+          <Reveal delay={0}>
+            <div style={{display:'inline-flex',alignItems:'center',gap:'10px',background:'rgba(247,37,133,.1)',border:'1px solid rgba(247,37,133,.35)',borderRadius:'30px',padding:'8px 20px',marginBottom:'36px',fontSize:'12px',fontWeight:'800',letterSpacing:'3px',textTransform:'uppercase',color:'#ff6eb5'}}>
+              <span style={{width:8,height:8,borderRadius:'50%',background:'#f72585',display:'inline-block',animation:'pulseGlow 2s infinite'}}/>
+              Live · Synchronized · Private
+            </div>
+          </Reveal>
 
-            <Reveal delay={0.2}>
-              <p className="hero-sub-3d">
-                Real-time synchronized audio for groups.<br/>
-                <strong style={{ color:'#fff' }}>No app. No account. No lag.</strong> Just open, create a room, and everyone hears the same song at the exact same millisecond.
-              </p>
-            </Reveal>
+          {/* Main title */}
+          <Reveal delay={0.1} y={80} scale>
+            <h1 style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'clamp(88px,17vw,190px)',lineHeight:.86,letterSpacing:'-4px',margin:'0 0 32px',background:'linear-gradient(170deg,#ffffff 0%,#ffffff 30%,#f72585 65%,#4cc9f0 100%)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',filter:'drop-shadow(0 0 60px rgba(247,37,133,.45))'}}>
+              HEAR<br/>TOGETHER
+            </h1>
+          </Reveal>
 
-            <Reveal delay={0.3}>
-              <div className="hero-btns-3d">
-                <button className="btn-3d-primary" onClick={() => { setView('app-entry'); window.scrollTo(0,0); }}>🎉 Create a Room Free</button>
-                <button className="btn-3d-ghost" onClick={() => document.getElementById('how')?.scrollIntoView({behavior:'smooth'})}>See How It Works</button>
-              </div>
-            </Reveal>
-          </div>
+          {/* Sub */}
+          <Reveal delay={0.2}>
+            <p style={{fontSize:'clamp(16px,2.4vw,21px)',color:'#c0c0e0',lineHeight:1.8,maxWidth:'640px',margin:'0 auto 48px',fontWeight:400}}>
+              Real-time synchronized audio for groups.<br/>
+              <strong style={{color:'#ffffff',fontWeight:800}}>No app. No account. No lag.</strong><br/>
+              Create a room and everyone hears the same beat at the exact same millisecond.
+            </p>
+          </Reveal>
 
-          {/* Live stats */}
-          <div className="stats-3d">
-            <StatCounter value={stats.rooms}     unit=""      label="Active Rooms"    color="#f72585" delay={0.4} />
-            <StatCounter value={stats.listeners} unit=""      label="Live Listeners"  color="#4cc9f0" delay={0.5} />
-            <StatCounter value="100"             unit="ms"    label="Sync Precision"  color="#06d6a0" delay={0.6} />
-            <StatCounter value="0"               unit="MB"    label="Data Stored"     color="#ffd60a" delay={0.7} />
-          </div>
+          {/* CTA buttons */}
+          <Reveal delay={0.3}>
+            <div style={{display:'flex',gap:'16px',justifyContent:'center',flexWrap:'wrap',marginBottom:'70px'}}>
+              <button className="btn-primary" style={{animation:'pulseGlow 3s ease-in-out infinite'}} onClick={go}>🎉 Create a Room Free</button>
+              <button className="btn-ghost" onClick={()=>nav('how')}>See How It Works ↓</button>
+            </div>
+          </Reveal>
 
-          {/* Floating device tags */}
-          <div style={{ position:'relative', height:'120px', maxWidth:'700px', margin:'40px auto 0', display:'none' }} className="devices-demo">
-            <FloatingDevice name="Arjun" device="iPhone 15"   color="247,37,133"  delay={0.8} x="5%"  y="20px" />
-            <FloatingDevice name="Priya" device="Galaxy S24"  color="76,201,240"  delay={0.9} x="30%" y="60px" />
-            <FloatingDevice name="Meera" device="Pixel 8"     color="6,214,160"   delay={1.0} x="55%" y="10px" />
-            <FloatingDevice name="Ravi"  device="OnePlus 12"  color="255,214,10"  delay={1.1} x="78%" y="50px" />
-          </div>
+          {/* Live stats row */}
+          <Reveal delay={0.4}>
+            <div className="grid-4" style={{marginBottom:'48px'}}>
+              {[
+                {v:stats.rooms,u:'',l:'Active Rooms',c:'#f72585'},
+                {v:stats.listeners,u:'',l:'Live Listeners',c:'#4cc9f0'},
+                {v:'<100',u:'ms',l:'Sync Precision',c:'#06d6a0'},
+                {v:'0',u:'KB',l:'Data Stored',c:'#ffd60a'},
+              ].map(({v,u,l,c},i)=>(
+                <div key={l} className="stat-block">
+                  <Count value={v} unit={u} color={c} delay={.4+i*.08} size="clamp(32px,5vw,52px)"/>
+                  <div style={{fontSize:'11px',fontWeight:'700',letterSpacing:'2px',textTransform:'uppercase',color:'#555577',marginTop:'8px'}}>{l}</div>
+                </div>
+              ))}
+            </div>
+          </Reveal>
+
+          {/* Floating user tags */}
+          <Reveal delay={0.55}>
+            <div style={{display:'flex',flexWrap:'wrap',gap:'10px',justifyContent:'center'}}>
+              {[['Arjun','iPhone 15','247,37,133'],['Priya','Galaxy S24','76,201,240'],['Meera','Pixel 8','6,214,160'],['Ravi','MacBook','255,214,10'],['Sara','OnePlus 12','123,47,247']].map(([n,d,c])=>(
+                <Tag key={n} name={n} device={d} color={c}/>
+              ))}
+            </div>
+          </Reveal>
         </div>
 
-        {/* Scroll indicator */}
-        <div style={{ position:'absolute', bottom:'32px', left:'50%', transform:'translateX(-50%)', display:'flex', flexDirection:'column', alignItems:'center', gap:'8px', opacity:0.5 }}>
-          <span style={{ fontSize:'11px', letterSpacing:'2px', textTransform:'uppercase', color:'var(--sub)' }}>Scroll</span>
-          <div style={{ width:'1px', height:'40px', background:'linear-gradient(to bottom, var(--sub), transparent)' }} />
+        {/* Scroll hint */}
+        <div style={{position:'absolute',bottom:'30px',left:'50%',transform:'translateX(-50%)',zIndex:2,display:'flex',flexDirection:'column',alignItems:'center',gap:'8px',opacity:.4}}>
+          <span style={{fontSize:'10px',letterSpacing:'4px',textTransform:'uppercase',color:'#888899',fontFamily:"'JetBrains Mono',monospace"}}>Scroll</span>
+          <div style={{fontSize:'24px',color:'#888899',animation:'scrollBounce 2s ease-in-out infinite'}}>↓</div>
         </div>
       </section>
 
-      {/* ══════════ HOW IT WORKS ══════════ */}
-      <section id="how" className="section-3d" style={{ background:'linear-gradient(180deg, #06060f, #0d0d20 50%, #06060f)' }}>
-        <div style={{ maxWidth:'1100px', margin:'0 auto' }}>
+      {/* ══ MARQUEE STRIP ══ */}
+      <div className="divider"/>
+      <MarqueeStrip/>
+      <div className="divider"/>
+
+      {/* ══ HOW IT WORKS ══ */}
+      <section id="how" style={{padding:'130px 40px',background:'linear-gradient(180deg,#050510 0%,#0a0a20 50%,#050510 100%)'}}>
+        <div style={{maxWidth:'1200px',margin:'0 auto'}}>
           <Reveal>
-            <div className="section-label-3d">⚡ Three Steps</div>
-            <h2 className="section-title-3d">Zero friction.<br/>Instant sync.</h2>
-            <p className="section-sub-3d">No downloads. No sign-up. Works in any browser on any phone.</p>
+            <div style={{textAlign:'center',marginBottom:'72px'}}>
+              <div style={{display:'inline-flex',alignItems:'center',gap:'8px',background:'rgba(247,37,133,.1)',border:'1px solid rgba(247,37,133,.3)',borderRadius:'24px',padding:'7px 18px',marginBottom:'20px',fontSize:'11px',fontWeight:'800',letterSpacing:'3px',textTransform:'uppercase',color:'#ff6eb5'}}>⚡ Four Steps</div>
+              <h2 style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'clamp(52px,8vw,96px)',lineHeight:.9,color:'#fff',marginBottom:'20px',letterSpacing:'-2px'}}>Zero friction.<br/>Instant sync.</h2>
+              <p style={{fontSize:'18px',color:'#9090b0',lineHeight:1.75,maxWidth:'520px',margin:'0 auto'}}>No downloads. No accounts. Works in any browser on any device, anywhere in the world.</p>
+            </div>
           </Reveal>
 
-          <div className="steps-3d">
-            {[
-              { icon:'🎙️', n:'01', t:'Create a Room', d:'Enter your name, tap "Create Party Room". Get a unique 5-char room code. Upload up to 10 songs — MP3, WAV, FLAC, AAC supported.', color:'#f72585' },
-              { icon:'📲', n:'02', t:'Share the Code', d:'Send your room code or QR to friends. They open HushPod in any browser, type the code, and they\'re in — no installation required.', color:'#4cc9f0' },
-              { icon:'🎧', n:'03', t:'Listen Together', d:'Everyone hears the same audio at the same millisecond. Host controls play, pause, queue. Guests suggest songs via chat.', color:'#06d6a0' },
-              { icon:'🔄', n:'04', t:'Pass the Aux', d:'Guests can request host privileges. Pass control with one tap. If host leaves, next listener auto-promotes — party never stops.', color:'#ffd60a' },
-            ].map((s, i) => (
-              <Reveal key={s.n} delay={i * 0.1}>
-                <TiltCard className="step-3d" style={{ borderColor: `rgba(255,255,255,0.07)` }}>
-                  <div className="step-num-3d">{s.n}</div>
-                  <div className="step-icon-3d">{s.icon}</div>
-                  <div className="step-title-3d" style={{ color: s.color }}>{s.t}</div>
-                  <div className="step-desc-3d">{s.d}</div>
-                </TiltCard>
-              </Reveal>
-            ))}
+          <div className="grid-4">
+            <StepCard n="01" icon="🎙️" title="Create a Room" color="#f72585" delay={0}
+              desc="Enter your name, tap Create. Get a unique 5-char code. Upload up to 10 songs — MP3, WAV, FLAC, AAC all supported." />
+            <StepCard n="02" icon="📲" title="Share the Code" color="#4cc9f0" delay={0.1}
+              desc="Send the room code or scan the QR. Friends open HushPod in any browser, type the code — they're in instantly." />
+            <StepCard n="03" icon="🎧" title="Listen Together" color="#06d6a0" delay={0.2}
+              desc="Everyone hears the same audio at the same millisecond. Host controls playback. Guests react and suggest songs." />
+            <StepCard n="04" icon="👑" title="Pass the Aux" color="#ffd60a" delay={0.3}
+              desc="Promote guests to DJ. Transfer host crown. If host leaves, next listener auto-promotes. Party never stops." />
           </div>
         </div>
       </section>
 
-      {/* ══════════ FEATURES ══════════ */}
-      <section id="features" className="section-3d">
-        <div style={{ maxWidth:'1100px', margin:'0 auto' }}>
-          <Reveal style={{ textAlign:'center' }}>
-            <div className="section-label-3d">✨ Everything Included</div>
-            <h2 className="section-title-3d">Built for real<br/>group experiences</h2>
-            <p className="section-sub-3d" style={{ margin:'0 auto', textAlign:'center' }}>Every feature engineered for low latency and high reliability.</p>
+      {/* ══ FEATURES ══ */}
+      <section id="features" className="section">
+        <Reveal style={{textAlign:'center',marginBottom:'72px'}}>
+          <div style={{display:'inline-flex',alignItems:'center',gap:'8px',background:'rgba(76,201,240,.1)',border:'1px solid rgba(76,201,240,.3)',borderRadius:'24px',padding:'7px 18px',marginBottom:'20px',fontSize:'11px',fontWeight:'800',letterSpacing:'3px',textTransform:'uppercase',color:'#4cc9f0'}}>✨ Everything Included</div>
+          <h2 style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'clamp(52px,8vw,96px)',lineHeight:.9,color:'#fff',marginBottom:'20px',letterSpacing:'-2px'}}>Built for real<br/>group experiences</h2>
+          <p style={{fontSize:'18px',color:'#9090b0',lineHeight:1.75,maxWidth:'520px',margin:'0 auto'}}>Every feature engineered for precision, reliability, and zero friction.</p>
+        </Reveal>
+
+        <div className="grid-feat">
+          {[
+            {icon:'🔴',t:'Dead Reckoning Sync',d:'Between heartbeats, guests mathematically calculate the host\'s exact playback position — drift never accumulates.',live:true},
+            {icon:'⚡',t:'Atomic Playback Start',d:'All devices receive a future timestamp to begin simultaneously — true atomic sync from the very first beat.',live:true},
+            {icon:'🎧',t:'BT Auto-Detection',d:'Bluetooth headphones auto-detected. Latency profile applied instantly using 13-device codec database. Mid-session swaps handled.',live:true},
+            {icon:'📦',t:'Batch Upload (10 Songs)',d:'Full setlist upload at once. Auto-advance plays next song. Drag-and-drop reorder. Guest upvoting system.',live:true},
+            {icon:'💬',t:'Chat + Emoji Reactions',d:'Real-time chat. Floating emoji reactions (🔥❤️🎵🎉) animate over the screen. Typing indicators. Instant delivery.',live:true},
+            {icon:'🔗',t:'QR Code Sharing',d:'One tap generates a QR code for your room. Anyone scans to join instantly. URL auto-fills room code on landing.',live:true},
+            {icon:'🌙',t:'Screen-off Resilience',d:'Wake Lock prevents OS from killing audio. Tab restore re-syncs to the exact correct millisecond within 200ms.',live:true},
+            {icon:'🔒',t:'Zero Data Retention',d:'Audio lives in RAM only. Room ends → everything permanently deleted. No logs, no storage, no accounts, ever.',live:true},
+            {icon:'🔔',t:'Lock Screen Controls',d:'Full Media Session API — play, pause, skip from your lock screen or notification shade. Custom artwork per room.',live:true},
+            {icon:'🔑',t:'Password Protection',d:'Optionally lock rooms with a password. 30-second host reconnect grace period. Admin and DJ permission system.',live:true},
+            {icon:'📊',t:'Play History',d:'Full session history of every song played with timestamps. Collapsible in the DJ Desk. Persists for late joiners.',live:true},
+            {icon:'♾️',t:'Unlimited Rooms',d:'Premium plans with unlimited listeners, rooms, and lossless audio quality coming soon for larger events.',live:false},
+          ].map((f,i)=><FeatCard key={f.t} {...f} delay={(i%4)*.07}/>)}
+        </div>
+      </section>
+
+      {/* ══ USE CASES ══ */}
+      <section id="cases" style={{padding:'130px 40px',background:'linear-gradient(180deg,#050510 0%,#08081a 50%,#050510 100%)'}}>
+        <div style={{maxWidth:'1200px',margin:'0 auto'}}>
+          <Reveal style={{textAlign:'center',marginBottom:'72px'}}>
+            <div style={{display:'inline-flex',alignItems:'center',gap:'8px',background:'rgba(6,214,160,.1)',border:'1px solid rgba(6,214,160,.3)',borderRadius:'24px',padding:'7px 18px',marginBottom:'20px',fontSize:'11px',fontWeight:'800',letterSpacing:'3px',textTransform:'uppercase',color:'#06d6a0'}}>🌍 Use Cases</div>
+            <h2 style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'clamp(52px,8vw,96px)',lineHeight:.9,color:'#fff',marginBottom:'20px',letterSpacing:'-2px'}}>Made for every<br/>shared moment</h2>
+            <p style={{fontSize:'18px',color:'#9090b0',lineHeight:1.75,maxWidth:'520px',margin:'0 auto'}}>From silent discos to gym classes — HushPod makes group audio effortless.</p>
           </Reveal>
 
-          <div className="features-3d">
-            {[
-              { icon:'🔴', t:'Dead Reckoning Sync',    d:'Between heartbeats, guests mathematically calculate the host\'s exact position — eliminating drift accumulation.', live:true },
-              { icon:'⚡', t:'Seeked Recalculation',   d:'After every seek, we recalculate position — eliminating 100–200ms mobile seek latency from the sync equation.', live:true },
-              { icon:'🗓️', t:'Scheduled Playback',    d:'All devices receive a future timestamp to begin playback simultaneously — true atomic sync from the first beat.', live:true },
-              { icon:'📦', t:'Batch Upload (10 Songs)',d:'Upload your entire setlist at once. Auto-advance plays next seamlessly. Drag and drop supported on desktop.', live:true },
-              { icon:'💬', t:'Emoji Reactions + Chat', d:'Built-in chat with floating emoji reactions. Real-time messages delivered to everyone via WebSocket instantly.', live:true },
-              { icon:'🔗', t:'QR Code Sharing',        d:'One tap generates a QR for your room. Anyone can scan to join instantly. URL auto-fills the room code on landing.', live:true },
-              { icon:'🌙', t:'Screen-off Resilience',  d:'Wake Lock API keeps your screen active. If it turns off, reconnection re-syncs audio to exact position in ms.', live:true },
-              { icon:'🎧', t:'BT Auto-Sync',           d:'Bluetooth headphones and speakers are auto-detected. Latency is measured and applied. Mid-session swaps handled.', live:true },
-              { icon:'🔒', t:'Zero Data Retention',    d:'Audio lives in server RAM only. When the room ends, everything deleted. No logs. No storage. No accounts.', live:true },
-              { icon:'🔔', t:'Lock Screen Controls',   d:'Full Media Session API — play, pause, skip from your lock screen or notification shade. Custom artwork per room.', live:true },
-              { icon:'🌐', t:'Works Anywhere',         d:'Same WiFi, different cities, across the world. HushPod works wherever internet reaches. Variance handled auto.', live:true },
-              { icon:'♾️', t:'Unlimited Listeners',    d:'Free tier: 15 listeners. Premium coming soon with unlimited participants, rooms, and lossless quality.', live:false },
-            ].map((f, i) => (
-              <Reveal key={f.t} delay={(i % 4) * 0.08}>
-                <TiltCard className="feat-3d" strength={6}>
-                  <div className="feat-icon-3d">{f.icon}</div>
-                  <div className="feat-title-3d">{f.t}</div>
-                  <div className="feat-desc-3d">{f.d}</div>
-                  <span className={`feat-badge-3d ${f.live ? 'badge-live' : 'badge-soon'}`}>{f.live ? 'Live' : 'Coming Soon'}</span>
-                </TiltCard>
-              </Reveal>
-            ))}
+          <div className="grid-3">
+            <CaseCard emoji="🎉" title="Silent Disco Parties" delay={0}
+              desc="Replace expensive FM transmitters. Everyone dances to the same beat through their own earphones. No hardware, no clashes."
+              grad="linear-gradient(135deg,rgba(247,37,133,.14),rgba(123,47,247,.14))" border="rgba(247,37,133,.25)"/>
+            <CaseCard emoji="📚" title="Synchronized Study" delay={0.1}
+              desc="Study with friends across locations. Everyone hears the same lo-fi at the same moment — shared focus atmosphere."
+              grad="linear-gradient(135deg,rgba(76,201,240,.14),rgba(0,180,216,.14))" border="rgba(76,201,240,.25)"/>
+            <CaseCard emoji="🚗" title="Road Trips" delay={0.2}
+              desc="Different cars, same song, same millisecond. The convoy moves to one beat. Host controls the vibe for the whole group."
+              grad="linear-gradient(135deg,rgba(6,214,160,.14),rgba(0,168,107,.14))" border="rgba(6,214,160,.25)"/>
+            <CaseCard emoji="🏋️" title="Gym Classes" delay={0.3}
+              desc="Sync workout music to every participant. No expensive sound system — just HushPod and everyone's Bluetooth speakers."
+              grad="linear-gradient(135deg,rgba(255,214,10,.14),rgba(247,127,0,.14))" border="rgba(255,214,10,.25)"/>
+            <CaseCard emoji="🎬" title="Remote Watch Parties" delay={0.4}
+              desc="Sync ambient music for virtual gatherings. Everyone feels like they're in the same room even when continents apart."
+              grad="linear-gradient(135deg,rgba(247,37,133,.10),rgba(76,201,240,.10))" border="rgba(247,37,133,.20)"/>
+            <CaseCard emoji="🏛️" title="Audio Tours" delay={0.5}
+              desc="Museums sync audio guides to every visitor simultaneously. Guide controls the pace. Everyone hears the same narration."
+              grad="linear-gradient(135deg,rgba(123,47,247,.14),rgba(76,201,240,.14))" border="rgba(123,47,247,.25)"/>
           </div>
         </div>
       </section>
 
-      {/* ══════════ USE CASES ══════════ */}
-      <section id="usecases" className="section-3d" style={{ background:'linear-gradient(180deg,#06060f,#0d0d20 50%,#06060f)' }}>
-        <div style={{ maxWidth:'1100px', margin:'0 auto' }}>
-          <Reveal style={{ textAlign:'center' }}>
-            <div className="section-label-3d">🌍 Use Cases</div>
-            <h2 className="section-title-3d">Made for every<br/>shared moment</h2>
-            <p className="section-sub-3d" style={{ margin:'0 auto', textAlign:'center' }}>From silent discos to study halls — HushPod makes group audio effortless.</p>
-          </Reveal>
-
-          <div className="cases-3d">
+      {/* ══ TECH DEEP DIVE ══ */}
+      <section id="tech" className="section">
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'80px',alignItems:'center'}}>
+          <div>
+            <Reveal x={-50}>
+              <div style={{display:'inline-flex',alignItems:'center',gap:'8px',background:'rgba(123,47,247,.1)',border:'1px solid rgba(123,47,247,.35)',borderRadius:'24px',padding:'7px 18px',marginBottom:'20px',fontSize:'11px',fontWeight:'800',letterSpacing:'3px',textTransform:'uppercase',color:'#bb86fc'}}>🔬 Under the Hood</div>
+              <h2 style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'clamp(44px,6vw,80px)',lineHeight:.9,color:'#fff',marginBottom:'24px',letterSpacing:'-1px'}}>Engineered for<br/>precision</h2>
+              <p style={{fontSize:'17px',color:'#8888a8',lineHeight:1.8,marginBottom:'44px'}}>Every millisecond matters. Our sync engine is built from first principles to eliminate every source of drift.</p>
+            </Reveal>
             {[
-              { e:'🎉', t:'Silent Disco Parties',   d:'Replace expensive FM transmitters. Everyone dances to the same beat through their own earphones. No hardware, no frequency clashes.', g:'linear-gradient(135deg, rgba(247,37,133,0.15), rgba(123,47,247,0.15))', b:'rgba(247,37,133,0.25)' },
-              { e:'📚', t:'Synchronized Study',     d:'Study with your friend group. Everyone hears the same lo-fi playlist at the same moment — shared focus atmosphere across locations.', g:'linear-gradient(135deg, rgba(76,201,240,0.15), rgba(0,180,216,0.15))', b:'rgba(76,201,240,0.25)' },
-              { e:'🚗', t:'Road Trips',             d:'Different cars, same song, same millisecond. The convoy moves to one beat. Host controls the vibe for the whole group.', g:'linear-gradient(135deg, rgba(6,214,160,0.15), rgba(0,168,107,0.15))', b:'rgba(6,214,160,0.25)' },
-              { e:'🏋️', t:'Gym Classes',           d:'Sync workout music to every participant simultaneously. No expensive sound system — just HushPod and everyone\'s earphones.', g:'linear-gradient(135deg, rgba(255,214,10,0.15), rgba(247,127,0,0.15))', b:'rgba(255,214,10,0.25)' },
-              { e:'🎬', t:'Remote Watch Parties',   d:'Sync background music for remote events. Everyone feels like they\'re in the same room even when apart.', g:'linear-gradient(135deg, rgba(247,37,133,0.12), rgba(76,201,240,0.12))', b:'rgba(247,37,133,0.2)' },
-              { e:'🏛️', t:'Audio Tours',           d:'Museums and galleries sync audio guides to every visitor simultaneously. The guide controls the pace. Everyone hears the same thing.', g:'linear-gradient(135deg, rgba(123,47,247,0.15), rgba(76,201,240,0.15))', b:'rgba(123,47,247,0.25)' },
-            ].map((c, i) => (
-              <Reveal key={c.t} delay={(i % 3) * 0.1}>
-                <TiltCard
-                  className="case-3d"
-                  style={{ background: c.g, border: `1px solid ${c.b}` }}
-                >
-                  <div style={{ fontSize:'40px', marginBottom:'16px' }}>{c.e}</div>
-                  <div style={{ fontSize:'17px', fontWeight:'800', marginBottom:'10px' }}>{c.t}</div>
-                  <div style={{ fontSize:'14px', color:'var(--sub)', lineHeight:'1.65' }}>{c.d}</div>
-                </TiltCard>
-              </Reveal>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ══════════ TECH STATS ══════════ */}
-      <section id="tech" className="section-3d">
-        <div style={{ maxWidth:'1100px', margin:'0 auto', display:'grid', gridTemplateColumns:'1fr 1fr', gap:'80px', alignItems:'center' }}>
-          <Reveal>
-            <div className="section-label-3d">🔬 Under the Hood</div>
-            <h2 className="section-title-3d">Engineered for<br/>precision</h2>
-            <p className="section-sub-3d" style={{ marginBottom:'40px' }}>Every millisecond matters. Our sync engine is built from first principles.</p>
-            {[
-              { icon:'⏱️', t:'Server-stamped timestamps', d:'Every event stamped with server Date.now() — all guests reference the same clock, eliminating per-device offset errors.' },
-              { icon:'📐', t:'Seeked-event recalculation', d:'After seeking, we wait for the browser\'s seeked confirmation then recalculate — absorbing 100–200ms mobile seek latency.' },
-              { icon:'🧭', t:'Dead reckoning sync', d:'Between heartbeats, the sync loop calculates the host\'s exact position mathematically — drift never accumulates.' },
-              { icon:'🔇', t:'Glitch-free correction', d:'Small drifts never corrected mid-play. Only catastrophic drift triggers a seek. Smooth audio always wins.' },
-            ].map((item, i) => (
-              <Reveal key={item.t} delay={i * 0.1}>
-                <div style={{ display:'flex', gap:'16px', marginBottom:'24px', padding:'16px', borderRadius:'14px', background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)' }}>
-                  <span style={{ fontSize:'24px', flexShrink:0 }}>{item.icon}</span>
+              {icon:'⏱️',t:'Server-stamped timestamps',d:'Every event stamped with server Date.now() — all guests reference the same clock, eliminating per-device drift.'},
+              {icon:'📐',t:'Seeked-event recalculation',d:'After seeking, we wait for the browser\'s seeked event then recalculate — absorbing 100–200ms mobile seek latency.'},
+              {icon:'🧭',t:'Dead reckoning at 60fps',d:'Between heartbeats, the sync engine calculates the exact position mathematically — drift never accumulates.'},
+              {icon:'🎙️',t:'Sonar acoustic calibration',d:'Optional physical ping-and-measure latency calibration using the device microphone — physical air delay measured.'},
+            ].map((item,i)=>(
+              <Reveal key={item.t} delay={i*.1} x={-30}>
+                <div style={{display:'flex',gap:'18px',marginBottom:'20px',padding:'20px 22px',borderRadius:'18px',background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.07)',transition:'border-color .3s'}}
+                  onMouseEnter={e=>e.currentTarget.style.borderColor='rgba(123,47,247,.3)'}
+                  onMouseLeave={e=>e.currentTarget.style.borderColor='rgba(255,255,255,.07)'}>
+                  <span style={{fontSize:'26px',flexShrink:0,marginTop:'2px'}}>{item.icon}</span>
                   <div>
-                    <div style={{ fontWeight:'800', marginBottom:'4px', fontSize:'14px' }}>{item.t}</div>
-                    <div style={{ fontSize:'13px', color:'var(--sub)', lineHeight:'1.6' }}>{item.d}</div>
+                    <div style={{fontWeight:'800',fontSize:'14px',color:'#e0e0ff',marginBottom:'6px'}}>{item.t}</div>
+                    <div style={{fontSize:'13px',color:'#8080a0',lineHeight:1.75}}>{item.d}</div>
                   </div>
                 </div>
               </Reveal>
             ))}
-          </Reveal>
-
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' }}>
-            <StatCounter value="100" unit="ms"    label="Sync Precision"     color="#f72585" delay={0.1} />
-            <StatCounter value="500" unit="ms"    label="Heartbeat Interval" color="#4cc9f0" delay={0.2} />
-            <StatCounter value="150" unit="MB"    label="Max File Size"      color="#06d6a0" delay={0.3} />
-            <StatCounter value="10"  unit=""      label="Songs Per Batch"    color="#ffd60a" delay={0.4} />
-            <StatCounter value="8"   unit="x"     label="Clock Sync Samples" color="#7b2ff7" delay={0.5} />
-            <StatCounter value="0"   unit="MB"    label="Data Retained"      color="#f72585" delay={0.6} />
           </div>
+
+          <Reveal x={50}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'16px'}}>
+              {[
+                {v:'100',u:'ms',l:'Sync Precision',c:'#f72585',d:.1},
+                {v:'500',u:'ms',l:'Heartbeat Rate',c:'#4cc9f0',d:.2},
+                {v:'150',u:'MB',l:'Max File Size',c:'#06d6a0',d:.3},
+                {v:'10',u:'',l:'Songs Per Batch',c:'#ffd60a',d:.4},
+                {v:'8',u:'x',l:'Clock Samples',c:'#7b2ff7',d:.5},
+                {v:'0',u:'KB',l:'Data Retained',c:'#f72585',d:.6},
+              ].map(s=>(
+                <Tilt key={s.l} s={12}>
+                  <div style={{background:'rgba(255,255,255,.025)',border:`1px solid ${s.c}25`,borderRadius:'20px',padding:'28px 20px',textAlign:'center',boxShadow:`0 0 30px ${s.c}15,inset 0 0 20px ${s.c}08`,transition:'box-shadow .3s'}}
+                    onMouseEnter={e=>e.currentTarget.style.boxShadow=`0 0 50px ${s.c}30,inset 0 0 30px ${s.c}12`}
+                    onMouseLeave={e=>e.currentTarget.style.boxShadow=`0 0 30px ${s.c}15,inset 0 0 20px ${s.c}08`}>
+                    <Count value={s.v} unit={s.u} color={s.c} delay={s.d} size="clamp(32px,4vw,48px)"/>
+                    <div style={{fontSize:'10px',fontWeight:'800',letterSpacing:'2px',textTransform:'uppercase',color:'#555577',marginTop:'10px'}}>{s.l}</div>
+                  </div>
+                </Tilt>
+              ))}
+            </div>
+          </Reveal>
         </div>
 
-        <style>{`@media(max-width:768px){#tech .inner-grid{grid-template-columns:1fr!important;}}`}</style>
+        <style>{`@media(max-width:860px){#tech .section>div{grid-template-columns:1fr!important;gap:50px;}}`}</style>
       </section>
 
-      {/* ══════════ FAQ ══════════ */}
-      <section id="faq" className="section-3d" style={{ background:'linear-gradient(180deg,#06060f,#0d0d20 50%,#06060f)' }}>
-        <div style={{ maxWidth:'760px', margin:'0 auto', textAlign:'center' }}>
-          <Reveal>
-            <div className="section-label-3d">❓ FAQ</div>
-            <h2 className="section-title-3d">Common questions</h2>
+      {/* ══ FAQ ══ */}
+      <section id="faq" style={{padding:'130px 40px',background:'linear-gradient(180deg,#050510 0%,#08081a 50%,#050510 100%)'}}>
+        <div style={{maxWidth:'780px',margin:'0 auto'}}>
+          <Reveal style={{textAlign:'center',marginBottom:'60px'}}>
+            <div style={{display:'inline-flex',alignItems:'center',gap:'8px',background:'rgba(255,214,10,.08)',border:'1px solid rgba(255,214,10,.25)',borderRadius:'24px',padding:'7px 18px',marginBottom:'20px',fontSize:'11px',fontWeight:'800',letterSpacing:'3px',textTransform:'uppercase',color:'#ffd60a'}}>❓ FAQ</div>
+            <h2 style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'clamp(52px,8vw,96px)',lineHeight:.9,color:'#fff',letterSpacing:'-2px'}}>Common questions</h2>
           </Reveal>
-        </div>
 
-        <div className="faq-3d">
           {[
-            { q:'Do guests need to download an app?',         a:'No. HushPod works entirely in the browser. Guests open the link, enter the room code, and they\'re synced instantly. No installation, no account.' },
-            { q:'Does everyone need the same WiFi?',          a:'No. HushPod works over the internet — different networks, mobile data, different cities, countries. The sync engine handles network variance automatically.' },
-            { q:'What audio formats are supported?',          a:'MP3, WAV, FLAC, AAC and most common audio formats. Files up to 150MB each. Upload up to 10 songs at a time.' },
-            { q:'Is my music stored on HushPod servers?',     a:'Never permanently. Audio is held in server RAM only during your active session. When your room ends, everything is deleted immediately.' },
-            { q:'Can I use copyrighted music?',               a:'You are responsible for any content you upload. By accepting our Terms of Service, you confirm you own or have rights to any audio you share.' },
-            { q:'What happens if the host leaves?',           a:'The longest-connected listener auto-promotes to host. Hosts get a 30-second grace period to reconnect and reclaim their crown.' },
-            { q:'How many people can join a room?',           a:'Free rooms support 15 simultaneous listeners. Premium plans with unlimited listeners are coming soon.' },
-          ].map((f, i) => (
-            <Reveal key={i} delay={i * 0.04}>
-              <div className="faq-item-3d" onClick={() => setOpenFaq(openFaq === i ? null : i)}>
-                <div className="faq-q-3d">
-                  <span>{f.q}</span>
-                  <span className={`faq-arrow-3d ${openFaq === i ? 'open' : ''}`}>▾</span>
-                </div>
-                <div className={`faq-a-3d ${openFaq === i ? 'open' : ''}`}>{f.a}</div>
+            {q:'Do guests need to download an app?',a:'No. HushPod works entirely in the browser. Guests open the link, enter the room code, and they\'re synced instantly — no installation, no account needed.'},
+            {q:'Does everyone need the same WiFi?',a:'No. HushPod works over the internet — different networks, mobile data, different cities, countries. The sync engine handles network variance automatically.'},
+            {q:'What audio formats are supported?',a:'MP3, WAV, FLAC, AAC and most common audio formats. Files up to 150MB each. Upload up to 10 songs at a time for a full session setlist.'},
+            {q:'Is my music stored on HushPod servers?',a:'Never permanently. Audio is held in server RAM only during your active session. The moment your room ends, everything is permanently deleted. Zero data retained.'},
+            {q:'What happens if the host leaves?',a:'The longest-connected listener auto-promotes to host. Hosts get a 30-second grace period to reconnect and reclaim their crown without disrupting the session.'},
+            {q:'How many people can join a room?',a:'Free rooms support up to 15 simultaneous listeners. Premium plans with unlimited listeners are coming soon for larger events and enterprise use.'},
+            {q:'Can I use copyrighted music?',a:'You are responsible for any content you upload. By accepting our Terms of Service, you confirm you own or have the rights to share any audio in HushPod rooms.'},
+          ].map((f,i)=>(
+            <Reveal key={i} delay={i*.05}>
+              <div className="faq-item" onClick={()=>setOpenFaq(openFaq===i?null:i)}>
+                <div className="faq-q"><span>{f.q}</span><span className={`faq-arrow ${openFaq===i?'open':''}`}>▾</span></div>
+                <div className={`faq-a ${openFaq===i?'open':''}`}>{f.a}</div>
               </div>
             </Reveal>
           ))}
         </div>
       </section>
 
-      {/* ══════════ CTA ══════════ */}
-      <section className="cta-3d">
-        <div className="cta-glow-3d" />
-        <Reveal style={{ position:'relative', zIndex:1 }}>
-          <div className="section-label-3d" style={{ justifyContent:'center', display:'flex' }}>🎧 Start Free Today</div>
-          <div className="cta-title-3d">LISTEN<br/>TOGETHER<br/>NOW</div>
-          <p style={{ fontSize:'18px', color:'var(--sub)', marginBottom:'40px', lineHeight:'1.7' }}>
-            Create your first room in under 10 seconds.<br/>No sign-up. No credit card. Just music, perfectly in sync.
-          </p>
-          <button className="btn-3d-primary" style={{ fontSize:'18px', padding:'18px 52px' }} onClick={() => { setView('app-entry'); window.scrollTo(0,0); }}>
-            🎉 Create a Free Room
-          </button>
-        </Reveal>
+      {/* ══ FINAL CTA ══ */}
+      <section style={{padding:'160px 40px',textAlign:'center',position:'relative',overflow:'hidden'}}>
+        {/* Massive glow */}
+        <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:'900px',height:'600px',background:'radial-gradient(ellipse,rgba(247,37,133,.18) 0%,rgba(123,47,247,.10) 40%,transparent 70%)',pointerEvents:'none'}}/>
+        {/* Grid lines */}
+        <div style={{position:'absolute',inset:0,backgroundImage:'linear-gradient(rgba(247,37,133,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(247,37,133,.04) 1px,transparent 1px)',backgroundSize:'60px 60px',pointerEvents:'none'}}/>
+
+        <div style={{position:'relative',zIndex:1}}>
+          <Reveal>
+            <div style={{display:'inline-flex',alignItems:'center',gap:'8px',background:'rgba(247,37,133,.12)',border:'1px solid rgba(247,37,133,.35)',borderRadius:'30px',padding:'8px 20px',marginBottom:'32px',fontSize:'12px',fontWeight:'800',letterSpacing:'3px',textTransform:'uppercase',color:'#ff6eb5'}}>🎧 Start Free Today</div>
+          </Reveal>
+
+          <Reveal delay={0.1} y={80} scale>
+            <h2 style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'clamp(80px,15vw,180px)',lineHeight:.86,letterSpacing:'-4px',background:'linear-gradient(160deg,#ffffff 0%,#ffffff 30%,#f72585 60%,#4cc9f0 100%)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',filter:'drop-shadow(0 0 60px rgba(247,37,133,.4))',marginBottom:'32px'}}>
+              LISTEN<br/>TOGETHER<br/>NOW
+            </h2>
+          </Reveal>
+
+          <Reveal delay={0.2}>
+            <p style={{fontSize:'20px',color:'#a0a0c0',marginBottom:'52px',lineHeight:1.8,maxWidth:'560px',margin:'0 auto 52px'}}>
+              Create your first room in under 10 seconds.<br/>No sign-up. No credit card. Just music, perfectly in sync.
+            </p>
+          </Reveal>
+
+          <Reveal delay={0.3}>
+            <button className="btn-primary" style={{fontSize:'19px',padding:'22px 60px',animation:'pulseGlow 3s ease-in-out infinite'}} onClick={go}>
+              🎉 Create a Free Room
+            </button>
+          </Reveal>
+
+          {/* Social proof tags below CTA */}
+          <Reveal delay={0.45}>
+            <div style={{display:'flex',flexWrap:'wrap',gap:'10px',justifyContent:'center',marginTop:'48px',opacity:.7}}>
+              {[['✅','No credit card'],['✅','No download'],['✅','No account'],['✅','Works globally'],['✅','Free forever (15 users)']].map(([ic,l])=>(
+                <span key={l} style={{fontSize:'13px',color:'#7070a0',fontWeight:'600',display:'flex',alignItems:'center',gap:'6px'}}><span style={{color:'#06d6a0'}}>{ic}</span>{l}</span>
+              ))}
+            </div>
+          </Reveal>
+        </div>
       </section>
 
-      {/* ══════════ FOOTER ══════════ */}
-      <footer style={{ borderTop:'1px solid rgba(255,255,255,0.06)', padding:'60px 24px 40px' }}>
-        <div className="footer-3d">
-          <div className="footer-grid-3d">
-            <div>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:'32px', letterSpacing:'3px', background:'linear-gradient(135deg,#f72585,#4cc9f0)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', marginBottom:'14px' }}>HUSHPOD</div>
-              <p style={{ fontSize:'14px', color:'var(--sub)', lineHeight:'1.7', maxWidth:'300px' }}>Synchronized private group audio. Listen together in perfect sync — no app, no account, no lag.</p>
-              <p style={{ marginTop:'14px', fontSize:'12px', color:'var(--sub)' }}>Built by <span style={{ color:'#bb86fc', fontWeight:'700' }}>Zentry Hub Pvt Ltd</span></p>
-            </div>
-            <div className="footer-col-3d">
-              <h4>Product</h4>
-              <a href="#app" onClick={e => { e.preventDefault(); setView('app-entry'); window.scrollTo(0,0); }}>Launch App</a>
-              <a href="#features" onClick={e => { e.preventDefault(); document.getElementById('features')?.scrollIntoView({behavior:'smooth'}); }}>Features</a>
-              <a href="#how" onClick={e => { e.preventDefault(); document.getElementById('how')?.scrollIntoView({behavior:'smooth'}); }}>How It Works</a>
-              <a href="#tech" onClick={e => { e.preventDefault(); document.getElementById('tech')?.scrollIntoView({behavior:'smooth'}); }}>Technology</a>
-            </div>
-            <div className="footer-col-3d">
-              <h4>Company</h4>
-              <a href="#faq" onClick={e => { e.preventDefault(); document.getElementById('faq')?.scrollIntoView({behavior:'smooth'}); }}>FAQ</a>
-              <a href="#terms">Terms of Service</a>
-              <a href="mailto:contact@hushpod.app">Contact Us</a>
-            </div>
+      {/* ══ FOOTER ══ */}
+      <div className="divider"/>
+      <footer style={{padding:'72px 40px 48px',maxWidth:'1200px',margin:'0 auto'}}>
+        <div style={{display:'grid',gridTemplateColumns:'2.5fr 1fr 1fr',gap:'60px',marginBottom:'56px'}}>
+          <div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'36px',letterSpacing:'5px',background:'linear-gradient(135deg,#f72585,#4cc9f0)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',marginBottom:'18px'}}>HUSHPOD</div>
+            <p style={{fontSize:'14px',color:'#606088',lineHeight:1.8,maxWidth:'320px',marginBottom:'20px'}}>Synchronized private group audio. Listen together in perfect sync — no app, no account, no lag.</p>
+            <p style={{fontSize:'12px',color:'#444466'}}>Built by <span style={{color:'#bb86fc',fontWeight:'800'}}>Zentry Hub Pvt Ltd</span></p>
           </div>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'12px', paddingTop:'24px', borderTop:'1px solid rgba(255,255,255,0.05)', fontSize:'12px', color:'var(--sub)' }}>
-            <span>© 2026 HushPod · Built with ♥ in India</span>
-            <span style={{ fontFamily:"'JetBrains Mono',monospace" }}>v2.0.0 · Node.js + Socket.io · Zero data retention</span>
+          <div>
+            <div className="footer-label">Product</div>
+            {[['Launch App',go],['Features',()=>nav('features')],['How It Works',()=>nav('how')],['Technology',()=>nav('tech')]].map(([l,fn])=>(
+              <a key={l} className="footer-link" href="#" onClick={e=>{e.preventDefault();fn();}}>{l}</a>
+            ))}
           </div>
+          <div>
+            <div className="footer-label">Company</div>
+            <a className="footer-link" href="#" onClick={e=>{e.preventDefault();nav('faq');}}>FAQ</a>
+            <a className="footer-link" href="#">Terms of Service</a>
+            <a className="footer-link" href="mailto:contact@hushpod.app">Contact Us</a>
+          </div>
+        </div>
+        <style>{`@media(max-width:768px){footer>div:first-child>div:first-child{grid-template-columns:1fr!important;gap:36px;}}`}</style>
+        <div style={{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:'12px',paddingTop:'28px',borderTop:'1px solid rgba(255,255,255,.06)',fontSize:'12px',color:'#333355'}}>
+          <span>© 2026 HushPod · Built with ♥ in India</span>
+          <span style={{fontFamily:"'JetBrains Mono',monospace"}}>v2.0.0 · Node.js + Socket.io · Zero data retention</span>
         </div>
       </footer>
 

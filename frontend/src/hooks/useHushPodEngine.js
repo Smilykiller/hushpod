@@ -2,10 +2,11 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
 
-// Empty string = relative URLs. Frontend and backend are the same Render service,
-// so all API calls (/clocksync, /upload, /stream, socket.io) go to the same origin.
-// This also eliminates ALL CORS issues since there's no cross-origin request at all.
-const SERVER = "";
+// Check if we are testing locally or running in production on Render
+const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const BACKEND_URL = isLocal ? 'http://localhost:5000' : '';
+
+const SERVER = BACKEND_URL;
 
 export default function useHushPodEngine() {
   const navigate = useNavigate();
@@ -653,7 +654,8 @@ export default function useHushPodEngine() {
     await syncClock();
 
     if (!socketRef.current) {
-      socketRef.current = io(window.location.origin, { transports: ['websocket', 'polling'] });
+      const socketUrl = BACKEND_URL || window.location.origin;
+      socketRef.current = io(socketUrl, { transports: ['websocket', 'polling'] });
       setupSocketListeners(socketRef.current);
     }
 
