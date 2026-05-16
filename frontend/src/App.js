@@ -5,20 +5,29 @@ import './App.css';
 import useHushPodEngine from './hooks/useHushPodEngine';
 import NeonLoader from './components/NeonLoader';
 
-// PERF: Lazy-load heavy pages — they are only downloaded when actually visited.
-// Home (marketing) and Room (audio engine) are large. This cuts initial JS parse time.
 const Home = lazy(() => import('./pages/Home'));
 const Join = lazy(() => import('./pages/Join'));
 const Room = lazy(() => import('./pages/Room'));
 
-// Toast icon mapping
 const TOAST_ICONS = { ok: '✅', err: '❌', inf: 'ℹ️' };
 
-// Page transition wrapper
+// FIX: AnimatedPage must be a proper flex column root.
+// Using height:100vh caused the room content to overflow below the fold on mobile.
+// flex:1 + min-height:0 lets #room fill exactly the available space.
 function AnimatedPage({ children }) {
   const location = useLocation();
   return (
-    <div key={location.pathname} className="page-enter" style={{ display: 'contents' }}>
+    <div
+      key={location.pathname}
+      className="page-enter"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,        // critical — prevents double-height on mobile
+        width: '100%',
+      }}
+    >
       {children}
     </div>
   );
@@ -28,7 +37,6 @@ function HushPodApp() {
   const engine   = useHushPodEngine();
   const location = useLocation();
 
-  // Theme toggle — persisted to localStorage
   const [theme, setTheme] = useState(() => localStorage.getItem('hushpod_theme') || 'dark');
 
   useEffect(() => {
@@ -53,7 +61,8 @@ function HushPodApp() {
       a: Math.random() * .4 + .1,
     }));
     function resize() { W = c.width = window.innerWidth; H = c.height = window.innerHeight; }
-    resize(); window.addEventListener('resize', resize);
+    resize();
+    window.addEventListener('resize', resize);
     function draw() {
       cx.clearRect(0, 0, W, H);
       pts.forEach(p => {
@@ -63,7 +72,8 @@ function HushPodApp() {
         cx.beginPath(); cx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
         cx.fillStyle = p.col; cx.globalAlpha = p.a; cx.fill();
       });
-      cx.globalAlpha = 1; animId = requestAnimationFrame(draw);
+      cx.globalAlpha = 1;
+      animId = requestAnimationFrame(draw);
     }
     draw();
     return () => { window.removeEventListener('resize', resize); cancelAnimationFrame(animId); };
@@ -71,9 +81,9 @@ function HushPodApp() {
 
   return (
     <>
-      <canvas id="bgc"></canvas>
+      <canvas id="bgc" />
 
-      {/* Redesigned toast — slides from top, has icon, backdrop blur */}
+      {/* Toast */}
       <div className={`toast ${engine.toastData.visible ? 'on' : ''} ${engine.toastData.type}`}>
         <span className="toast-icon">{TOAST_ICONS[engine.toastData.type] || 'ℹ️'}</span>
         {engine.toastData.msg}
@@ -82,18 +92,11 @@ function HushPodApp() {
       {engine.isSyncing && <NeonLoader />}
 
       {!engine.isSyncing && (
-        // PERF: Suspense fallback shows NeonLoader while the lazy chunk downloads
         <Suspense fallback={<NeonLoader text="Loading..." />}>
           <Routes>
-            <Route path="/" element={
-              <AnimatedPage><Home setView={engine.setView} /></AnimatedPage>
-            }/>
-            <Route path="/join" element={
-              <AnimatedPage><Join {...engine} /></AnimatedPage>
-            }/>
-            <Route path="/room" element={
-              <AnimatedPage><Room {...engine} toggleTheme={toggleTheme} theme={theme} /></AnimatedPage>
-            }/>
+            <Route path="/"     element={<AnimatedPage><Home setView={engine.setView} /></AnimatedPage>} />
+            <Route path="/join" element={<AnimatedPage><Join {...engine} /></AnimatedPage>} />
+            <Route path="/room" element={<AnimatedPage><Room {...engine} toggleTheme={toggleTheme} theme={theme} /></AnimatedPage>} />
           </Routes>
         </Suspense>
       )}
