@@ -9,7 +9,6 @@ import React, { useEffect, useRef, useState } from 'react';
 ══════════════════════════════════════════════════════ */
 
 /* ── Animated mesh background ── */
-/* ── Animated mesh background ── */
 function MeshBg() {
   const ref = useRef(null);
   useEffect(() => {
@@ -22,13 +21,8 @@ function MeshBg() {
       vy: (Math.random() - .5) * .0003,
       col: ['#f72585','#4cc9f0','#7b2ff7','#06d6a0'][Math.floor(Math.random()*4)],
     }));
-    
-    // FIX: Added 'window.' to innerWidth and innerHeight
     const resize = () => { W = c.width = window.innerWidth; H = c.height = window.innerHeight; };
-    
-    // FIX: Added 'window.' to addEventListener
-    resize(); window.addEventListener('resize', resize); 
-    
+    resize(); window.addEventListener('resize', resize);
     const draw = () => {
       raf = requestAnimationFrame(draw);
       ctx.clearRect(0, 0, W, H);
@@ -62,8 +56,6 @@ function MeshBg() {
       ctx.globalAlpha = 1;
     };
     draw();
-    
-    // FIX: Added 'window.' to removeEventListener
     return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
   }, []);
   return <canvas ref={ref} style={{ position:'fixed', inset:0, zIndex:0, pointerEvents:'none', opacity:.6 }} />;
