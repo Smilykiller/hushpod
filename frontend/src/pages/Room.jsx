@@ -72,7 +72,15 @@ export default function Room({
 
   return (
     <>
-      <div id="room" className="scr on" style={{ display: 'flex' }}>
+      <div id="room" style={{
+        position: 'fixed',
+        inset: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'var(--bg)',
+        zIndex: 1,
+        overflow: 'hidden',
+      }}>
 
         {/* ── HEADER ── */}
         <div className="rhead">

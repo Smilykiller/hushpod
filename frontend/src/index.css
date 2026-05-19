@@ -248,13 +248,15 @@ input[type=text]:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(76,201
    rbody scrolls independently with overflow-y:auto.
    ═══════════════════════════════════════════════════════ */
 #room {
-  padding: 0;
+  /* position:fixed guarantees full viewport fill on ALL devices */
+  /* regardless of any broken flex chain from React Router wrappers */
+  position: fixed;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  flex: 1;                   /* fill AnimatedPage wrapper */
-  min-height: 0;             /* critical: don't force own height */
-  width: 100%;
-  position: relative;
+  background: var(--bg);
+  z-index: 1;
+  overflow: hidden;
 }
 .rhead {
   display: flex;
@@ -276,22 +278,40 @@ input[type=text]:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(76,201
 .rcode { font-size:11px; color:var(--sub); font-family:'JetBrains Mono',monospace; }
 .rbody {
   flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
   padding: 14px 16px;
-  max-width: 660px;
+  /* bottom padding = tab bar (70px) + safe area */
+  padding-bottom: calc(76px + env(safe-area-inset-bottom, 12px));
+  max-width: 680px;
   margin: 0 auto;
   width: 100%;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  z-index: 1;
-  overflow-y: auto;          /* rbody scrolls, not the whole page */
-  -webkit-overflow-scrolling: touch;
-  /* bottom padding = tab bar height + safe area */
-  padding-bottom: calc(80px + env(safe-area-inset-bottom, 16px));
+  /* without this, rbody collapses to zero height */
+  min-height: 0;
 }
 /* On desktop rbody doesn't need bottom padding for tab bar */
 @media(min-width:601px) {
-  .rbody { padding-bottom: 24px; }
+  .rbody {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: 14px 16px;
+  /* bottom padding = tab bar (70px) + safe area */
+  padding-bottom: calc(76px + env(safe-area-inset-bottom, 12px));
+  max-width: 680px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  /* without this, rbody collapses to zero height */
+  min-height: 0;
+}
 }
 .card { background:var(--s1); border:1px solid var(--border); border-radius:20px; padding:20px; position:relative; overflow:hidden; }
 .card-label { font-size:11px; font-weight:700; color:var(--sub); text-transform:uppercase; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; letter-spacing:2px;}
@@ -546,3 +566,5 @@ input[type=password]:focus { border-color:var(--cyan); box-shadow:0 0 0 3px rgba
   .controls-row button { width: 36px !important; height: 36px !important; }
   .controls-row .play-btn { width: 46px !important; height: 46px !important; }
 }
+
+@media(min-width:601px) { .rbody { padding-bottom: 24px; } }
