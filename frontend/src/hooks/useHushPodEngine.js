@@ -2,7 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
 
-const SERVER = "";
+// In production (Render): both frontend + backend are same origin → SERVER=""
+// In local dev: frontend=:3000, backend=:5000 → set REACT_APP_SERVER_URL=http://localhost:5000
+const SERVER = process.env.REACT_APP_SERVER_URL || "";
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════
@@ -846,7 +848,7 @@ export default function useHushPodEngine() {
     await syncClock();
 
     if (!socketRef.current) {
-      socketRef.current = io(window.location.origin, { transports: ['websocket', 'polling'] });
+      socketRef.current = io(SERVER || window.location.origin, { transports: ['websocket', 'polling'] });
       setupSocketListeners(socketRef.current);
     }
 

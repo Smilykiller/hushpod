@@ -387,11 +387,18 @@ body.light body::before { opacity: 0.015; }
    POLISH: 2 — PAGE TRANSITIONS
    ═══════════════════════════════════════════════════════ */
 .page-enter {
-  animation: pageEnter 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: pageFadeIn 0.25s ease both;
 }
+@keyframes pageFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 @keyframes pageEnter {
-  from { opacity: 0; transform: translateY(18px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  /* CRITICAL: no transform here — transform creates a containing block
+     that breaks position:fixed on ALL child elements (tab bar, BT badge etc) */
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 .page-exit {
   animation: pageExit 0.2s ease-in both;
@@ -531,7 +538,7 @@ input[type=password]:focus { border-color:var(--cyan); box-shadow:0 0 0 3px rgba
 
 /* FIX: page-enter must extend flex chain, not block it */
 .page-enter {
-  animation: pageEnter 0.28s ease both;
+  animation: pageFadeIn 0.25s ease both;
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -568,3 +575,12 @@ input[type=password]:focus { border-color:var(--cyan); box-shadow:0 0 0 3px rgba
 }
 
 @media(min-width:601px) { .rbody { padding-bottom: 24px; } }
+
+/* Room entrance — opacity only, NO transform (would break fixed children) */
+@keyframes roomEnter {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+#room {
+  animation: roomEnter 0.3s ease both;
+}
