@@ -39,6 +39,56 @@ body::before{
 
 #bgc{position:fixed;inset:0;z-index:0;pointer-events:none}
 .wrap{position:relative;z-index:1}
+/* ═══════════════════════════════════════════════
+   ROOM LAYOUT — DEFINITIVE FIX
+   position:fixed on #room = always fills viewport
+   on ALL devices regardless of any parent chain.
+   overflow:visible+scroll on rbody = content shows.
+   Three .rbody rules were conflicting — now ONE.
+═══════════════════════════════════════════════ */
+#room {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  z-index: 1;
+  /* overflow:hidden was clipping rbody scroll — removed */
+}
+
+
+
+
+
+
+
+
+
+.rbody {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: 14px 16px;
+  padding-bottom: calc(80px + env(safe-area-inset-bottom, 12px));
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  /* min-height:0 lets flex:1 work correctly */
+  min-height: 0;
+  /* force rbody to be visible and scrollable */
+  position: relative;
+  z-index: 1;
+}
+
+@media (min-width: 601px) {
+  .rbody { padding-bottom: 24px; }
+}
+
+
 .scr{display:none;position:relative;z-index:1;}
 .scr.on{display:flex;flex-direction:column;flex:1;min-height:0;width:100%;}
 
@@ -239,79 +289,16 @@ input[type=text]:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(76,201
 .join-box{width:100%;max-width:340px;margin:12px auto 0;background:var(--s1);border:1px solid rgba(76,201,240,.25);border-radius:18px;padding:20px;}
 .join-box h3{font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--sub);margin-bottom:12px}
 
-/* ═══════════════════════════════════════════════════════
-   ROOM LAYOUT — MOBILE FIXED
-   Root cause: #room used min-height:100vh inside a flex
-   parent that also had min-height:100vh. On mobile this
-   doubled the height, pushing rbody below the fold.
-   Fix: #room fills its AnimatedPage wrapper with flex:1,
-   rbody scrolls independently with overflow-y:auto.
-   ═══════════════════════════════════════════════════════ */
-#room {
-  /* position:fixed guarantees full viewport fill on ALL devices */
-  /* regardless of any broken flex chain from React Router wrappers */
-  position: fixed;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-  z-index: 1;
-  overflow: hidden;
-}
-.rhead {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  background: rgba(5,5,16,.95);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;           /* never compress the header */
-  gap: 10px;
-}
-.rhead-left { display:flex; flex-direction:column; gap:3px; min-width:0; }
-.rname { font-size:16px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.rcode { font-size:11px; color:var(--sub); font-family:'JetBrains Mono',monospace; }
-.rbody {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  -webkit-overflow-scrolling: touch;
-  padding: 14px 16px;
-  /* bottom padding = tab bar (70px) + safe area */
-  padding-bottom: calc(76px + env(safe-area-inset-bottom, 12px));
-  max-width: 680px;
-  margin: 0 auto;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  /* without this, rbody collapses to zero height */
-  min-height: 0;
-}
+
+
+
+
+
+
+
 /* On desktop rbody doesn't need bottom padding for tab bar */
 @media(min-width:601px) {
-  .rbody {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  -webkit-overflow-scrolling: touch;
-  padding: 14px 16px;
-  /* bottom padding = tab bar (70px) + safe area */
-  padding-bottom: calc(76px + env(safe-area-inset-bottom, 12px));
-  max-width: 680px;
-  margin: 0 auto;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  /* without this, rbody collapses to zero height */
-  min-height: 0;
-}
+  
 }
 .card { background:var(--s1); border:1px solid var(--border); border-radius:20px; padding:20px; position:relative; overflow:hidden; }
 .card-label { font-size:11px; font-weight:700; color:var(--sub); text-transform:uppercase; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; letter-spacing:2px;}
@@ -548,8 +535,8 @@ input[type=password]:focus { border-color:var(--cyan); box-shadow:0 0 0 3px rgba
 
 /* Room header — stack on very small screens */
 @media (max-width: 380px) {
-  .rhead { padding: 10px 12px; gap: 6px; }
-  .rname { font-size: 18px; }
+  
+  
   .rhead > div:last-child { gap: 4px; }
   .btn-sm { padding: 7px 10px; font-size: 11px; }
   .theme-toggle { width: 30px; height: 30px; font-size: 14px; }
@@ -574,13 +561,17 @@ input[type=password]:focus { border-color:var(--cyan); box-shadow:0 0 0 3px rgba
   .controls-row .play-btn { width: 46px !important; height: 46px !important; }
 }
 
-@media(min-width:601px) { .rbody { padding-bottom: 24px; } }
+@media(min-width:601px) {  }
 
 /* Room entrance — opacity only, NO transform (would break fixed children) */
 @keyframes roomEnter {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
-#room {
-  animation: roomEnter 0.3s ease both;
-}
+
+
+/* Room header styles */
+.rhead { flex-shrink:0; display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:rgba(5,5,16,.96); backdrop-filter:blur(24px); -webkit-backdrop-filter:blur(24px); border-bottom:1px solid var(--border); z-index:10; gap:10px; min-height:56px; }
+.rhead-left { display:flex; flex-direction:column; gap:3px; min-width:0; flex:1; overflow:hidden; }
+.rname { font-size:16px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text); }
+.rcode { font-size:11px; color:var(--sub); font-family:'JetBrains Mono',monospace; cursor:pointer; display:flex; align-items:center; gap:4px; }
